@@ -20,7 +20,7 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'Pedagogue — Piano & Music Theory Trainer',
+          name: 'Pedagogue',
           short_name: 'Pedagogue',
           description:
             'Offline-capable interactive piano and music theory practice trainer with Web MIDI, SVG notation, fingering, and ear training.',
