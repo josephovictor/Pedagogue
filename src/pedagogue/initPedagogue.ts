@@ -186,6 +186,8 @@ export function initPedagogue(): PedagogueController {
       ['h_bor', 'Modal interchange (borrowed)', 'I', 'Colour'],
       ['h_mii', 'Minor ii–V–i', 'I', 'Minor'],
       ['h_guide', 'Guide-tone targeting (3rds & 7ths)', 'I', 'Voice leading'],
+      ['h_close', 'Close-range voice leading (triads)', 'B', 'Voice leading'],
+      ['h_close7', 'Close-range voice leading (7th chords)', 'I', 'Voice leading'],
       ['h_back', 'Backdoor dominant', 'A', 'Substitutions'],
       ['h_dim', 'Diminished passing chords', 'A', 'Substitutions'],
       ['h_all', 'All substitutions mixed', 'A', 'Substitutions'],
@@ -488,8 +490,8 @@ export function initPedagogue(): PedagogueController {
     swt(
       'vlead',
       'Smooth voice leading',
-      'Connects progression chords with minimal finger movement and common tones.',
-      'prog,harm',
+      'Connects chords & progressions in close range for both hands with minimal finger movement and common tones.',
+      'chord,prog,harm',
     ) +
     swt(
       'exinv',
@@ -526,7 +528,7 @@ export function initPedagogue(): PedagogueController {
     ) +
     `<div class=f data-g="${ALL}"><button class=s id=cal type=button>Calibrate: press lowest, then highest key</button><small id=calmsg></small> <b id=rng></b><small class=why></small></div>` +
     `<div hidden>` +
-    `<select id=game>${['chord', 'slash', 'pass', 'scale', 'int', 'prog', 'ear'].map(x => `<option>${x}</option>`).join('')}</select>` +
+    `<select id=game>${['chord', 'slash', 'pass', 'scale', 'int', 'prog', 'harm_guide', 'harm_close', 'ear'].map(x => `<option>${x}</option>`).join('')}</select>` +
     `<select id=size>${R(3, 7).map(x => `<option>${x}</option>`).join('')}</select>` +
     `<select id=pool><option>all</option><option>key</option></select>` +
     `<select id=bass><option>any</option><option>chord</option><option>out</option></select>` +
@@ -559,6 +561,8 @@ export function initPedagogue(): PedagogueController {
     actTm: null as ReturnType<typeof setTimeout> | null,
     actWaitTm: null as ReturnType<typeof setTimeout> | null,
     actCd: null as ReturnType<typeof setInterval> | null,
+    prevRh: null as number[] | null,
+    prevLh: null as number[] | null,
   };
   let C: any;
 
@@ -741,6 +745,9 @@ export function initPedagogue(): PedagogueController {
     }
     if (ug == 'harm' && g == 'pass') {
       return 7;
+    }
+    if (ug == 'harm' && g == 'harm_close') {
+      return 42;
     }
     if (ug == 'ear') {
       const et = $('eartype').value;
@@ -946,44 +953,64 @@ export function initPedagogue(): PedagogueController {
     return c.length ? c[rand(c.length)] : makeVoicingMidi(ints, pc, inv, 4);
   }
 
-  // Picks octave/inversion closest to previous RH chord for smooth voice leading
+  // Picks octave/inversion closest to previous chord notes for close-range voice leading
   function putVoiceLed(
     ints: number[],
     pc: number,
-    prevRh: number[] | null,
+    prevNotes: number[] | null,
     fixedInv?: number,
+    zone: [number, number] = [55, 86],
+    maxInvLimit?: number,
   ): {notes: number[]; inv: number} {
+    const cap = maxInvLimit != null ? maxInvLimit : +$('inv').value;
     const invs =
       fixedInv != null
-        ? [fixedInv]
-        : R(0, Math.min(+$('inv').value, ints.length - 1));
-    if (!prevRh || !prevRh.length) {
+        ? [Math.min(fixedInv, ints.length - 1)]
+        : R(0, Math.min(cap, ints.length - 1));
+    const [zLo, zHi] = zone;
+    const loBound = Math.max(S.lo, zLo);
+    const hiBound = Math.min(S.hi, zHi);
+    const midTarget = (loBound + hiBound) / 2;
+
+    if (!prevNotes || !prevNotes.length) {
       const inv = invs[0];
       const cands: number[][] = [];
-      for (let o = 2; o <= 6; o++) {
+      for (let o = 1; o <= 7; o++) {
         const a = makeVoicingMidi(ints, pc, inv, o);
-        if (a[0] >= Math.max(S.lo, 57) && a.at(-1)! <= Math.min(S.hi, 84))
-          cands.push(a);
+        if (a[0] >= loBound && a.at(-1)! <= hiBound) cands.push(a);
       }
-      const chosen = cands.length ? cands[Math.floor(cands.length / 2)] : put(ints, pc, inv, [57, 84]);
-      return {notes: chosen, inv};
+      if (cands.length) {
+        cands.sort((a, b) => {
+          const avgA = a.reduce((s, n) => s + n, 0) / a.length;
+          const avgB = b.reduce((s, n) => s + n, 0) / b.length;
+          return Math.abs(avgA - midTarget) - Math.abs(avgB - midTarget);
+        });
+        return {notes: cands[0], inv};
+      }
+      return {notes: put(ints, pc, inv, [loBound, hiBound]), inv};
     }
 
-    const prevAvg = prevRh.reduce((s, n) => s + n, 0) / prevRh.length;
+    const prevSorted = [...prevNotes].sort((a, b) => a - b);
+    const prevAvg = prevSorted.reduce((s, n) => s + n, 0) / prevSorted.length;
     let best: {notes: number[]; inv: number; cost: number} | null = null;
 
     for (const inv of invs) {
-      for (let o = 1; o <= 7; o++) {
+      for (let o = 0; o <= 7; o++) {
         const a = makeVoicingMidi(ints, pc, inv, o);
-        if (a[0] < Math.max(S.lo, 55) || a.at(-1)! > Math.min(S.hi, 86))
-          continue;
+        if (a[0] < loBound || a.at(-1)! > hiBound) continue;
         const avg = a.reduce((s, n) => s + n, 0) / a.length;
-        // Total nearest-voice distance + centroid jump penalty
-        let dist = Math.abs(avg - prevAvg) * 0.5;
-        for (const n of a) {
-          let minD = 99;
-          for (const p of prevRh) minD = Math.min(minD, Math.abs(n - p));
-          dist += minD;
+        let dist = Math.abs(avg - prevAvg) * 0.15;
+        if (a.length === prevSorted.length) {
+          // Exact voice-to-voice finger travel distance
+          for (let i = 0; i < a.length; i++) {
+            dist += Math.abs(a[i] - prevSorted[i]);
+          }
+        } else {
+          for (const n of a) {
+            let minD = 99;
+            for (const p of prevSorted) minD = Math.min(minD, Math.abs(n - p));
+            dist += minD;
+          }
         }
         if (!best || dist < best.cost) best = {notes: a, inv, cost: dist};
       }
@@ -991,7 +1018,7 @@ export function initPedagogue(): PedagogueController {
 
     if (best) return {notes: best.notes, inv: best.inv};
     const fallbackInv = invs[0];
-    return {notes: put(ints, pc, fallbackInv, [57, 84]), inv: fallbackInv};
+    return {notes: put(ints, pc, fallbackInv, [loBound, hiBound]), inv: fallbackInv};
   }
 
   interface VoicedChord {
@@ -1018,22 +1045,31 @@ export function initPedagogue(): PedagogueController {
     forceBass?: number,
     prevRh?: number[] | null,
     smooth?: boolean,
+    prevLh?: number[] | null,
+    allowAllInv?: boolean,
   ): VoicedChord {
     const c = $('clef').value;
+    const maxRhInv = allowAllInv ? ints.length - 1 : undefined;
+    const maxLhInv = allowAllInv
+      ? ints.length - 1
+      : Math.min(+$('lhinv').value, ints.length - 1);
+
     if (c == 'bass') {
-      const n = put(ints, pc, inv, [28, 64]);
+      const lhObj = smooth
+        ? putVoiceLed(ints, pc, prevLh || null, undefined, [28, 64], maxRhInv)
+        : {notes: put(ints, pc, inv, [28, 64]), inv};
       return {
-        notes: n,
-        hd: n.map(() => 'L'),
-        lhLen: n.length,
+        notes: lhObj.notes,
+        hd: lhObj.notes.map(() => 'L'),
+        lhLen: lhObj.notes.length,
         rhLen: 0,
-        lhInv: inv,
-        rhInv: inv,
+        lhInv: lhObj.inv,
+        rhInv: lhObj.inv,
       };
     }
     if (c == 'treble') {
       const rhObj = smooth
-        ? putVoiceLed(ints, pc, prevRh || null, undefined)
+        ? putVoiceLed(ints, pc, prevRh || null, undefined, [55, 86], maxRhInv)
         : {notes: put(ints, pc, inv, [57, 96]), inv};
       return {
         notes: rhObj.notes,
@@ -1048,15 +1084,44 @@ export function initPedagogue(): PedagogueController {
     // Grand staff (both hands)
     const bh = curBh();
     const rhObj = smooth
-      ? putVoiceLed(ints, pc, prevRh || null, undefined)
+      ? putVoiceLed(ints, pc, prevRh || null, undefined, [55, 86], maxRhInv)
       : {notes: put(ints, pc, inv, [58, 96]), inv};
     const r = rhObj.notes;
 
     if (bh == 'same' || bh == 'diff') {
-      const lInv = bh == 'same' ? rhObj.inv : lhInvOverride ?? inv;
-      const lMax = Math.min(62, r[0] - 1);
       const lMin = Math.max(S.lo, 28);
-      const l = put(ints, pc, lInv, [lMin, Math.max(lMin + 12, lMax)]);
+      const lMax = Math.max(lMin + 12, Math.min(62, r[0] - 1));
+      let l: number[];
+      let lInv: number;
+
+      if (smooth) {
+        if (bh == 'diff') {
+          const lhObj = putVoiceLed(
+            ints,
+            pc,
+            prevLh || null,
+            undefined,
+            [lMin, lMax],
+            maxLhInv,
+          );
+          l = lhObj.notes;
+          lInv = lhObj.inv;
+        } else {
+          const lhObj = putVoiceLed(
+            ints,
+            pc,
+            prevLh || null,
+            rhObj.inv,
+            [lMin, lMax],
+          );
+          l = lhObj.notes;
+          lInv = rhObj.inv;
+        }
+      } else {
+        lInv = bh == 'same' ? rhObj.inv : lhInvOverride ?? inv;
+        l = put(ints, pc, lInv, [lMin, lMax]);
+      }
+
       const all = [...l, ...r];
       return {
         notes: all,
@@ -1069,7 +1134,25 @@ export function initPedagogue(): PedagogueController {
     }
 
     const bassPc = forceBass ?? pc;
-    const bass = put([0], bassPc, 0, [28, Math.min(64, r[0] - 1)]);
+    let bass: number[];
+    if (smooth && prevLh && prevLh.length) {
+      const bassZoneLo = Math.max(S.lo, 28);
+      const bassZoneHi = Math.min(64, r[0] - 1);
+      const cands: number[] = [];
+      for (let o = 1; o <= 5; o++) {
+        const m = 12 * (o + 1) + bassPc;
+        if (m >= bassZoneLo && m <= bassZoneHi) cands.push(m);
+      }
+      if (cands.length) {
+        const target = prevLh[0];
+        cands.sort((a, b) => Math.abs(a - target) - Math.abs(b - target));
+        bass = [cands[0]];
+      } else {
+        bass = put([0], bassPc, 0, [28, Math.min(64, r[0] - 1)]);
+      }
+    } else {
+      bass = put([0], bassPc, 0, [28, Math.min(64, r[0] - 1)]);
+    }
     return {
       notes: [...bass, ...r],
       hd: [...bass.map(() => 'L'), ...r.map(() => 'R')],
@@ -2296,10 +2379,13 @@ export function initPedagogue(): PedagogueController {
     const set = (i: string, v: any) => ($(i).value = v);
     const chk = (i: string, v: boolean) => ($(i).checked = v);
     const fk = ug + f;
+    const changedFocus = S.fk != fk;
 
-    if (S.fk != fk) {
+    if (changedFocus) {
       S.fk = fk;
       S.n = 0;
+      S.prevRh = null;
+      S.prevLh = null;
     }
 
     S.f = f;
@@ -2406,6 +2492,12 @@ export function initPedagogue(): PedagogueController {
         chk('bor', true);
       } else if (f == 'h_guide') {
         g = 'harm_guide';
+      } else if (f == 'h_close' || f == 'h_close7') {
+        g = 'harm_close';
+        set('size', f == 'h_close7' ? 4 : 3);
+        if (changedFocus && $('bhmode').value == 'bass') {
+          set('bhmode', 'same');
+        }
       } else {
         g = 'prog';
         S.hf =
@@ -2552,6 +2644,24 @@ export function initPedagogue(): PedagogueController {
         ) {
           on = false;
           why = 'Used for arpeggio inversions in Scales';
+        }
+      }
+
+      if (on && id == 'vlead') {
+        if (ug == 'chord' && (g == 'slash' || fVal == 'v_ust')) {
+          on = false;
+          why = 'Slash and upper-structure drills fix voicing placement';
+        } else if (ug == 'harm' && (S.pt != null || g == 'harm_guide')) {
+          on = false;
+          why =
+            g == 'harm_guide'
+              ? 'Guide-tone targeting always uses smooth voice leading'
+              : 'Passing-chord drills focus on individual target chords';
+        } else if (g == 'harm_close') {
+          on = false;
+          why = 'Always active in close-range voice-leading drills';
+        } else if ($('vlead').checked && +$('inv').value == 0) {
+          why = 'Tip: raise Inversions above Root position to allow close-range inversions';
         }
       }
 
@@ -2736,7 +2846,8 @@ export function initPedagogue(): PedagogueController {
       ' · chord ' +
       (q.pos + 1) +
       '/' +
-      q.ch.length;
+      q.ch.length +
+      (c.subHint ? ' · ' + c.subHint : '');
   }
 
   /* =====================================================================
@@ -3453,6 +3564,8 @@ export function initPedagogue(): PedagogueController {
               ? S.n % (mx + 1)
               : rand(mx + 1);
       const lhInv = c.lhInv ?? inv;
+      let actualInv = inv;
+      let actualLhInv = lhInv;
       let nme = c.name;
       q.lab = c.lab;
 
@@ -3496,27 +3609,53 @@ export function initPedagogue(): PedagogueController {
         q.topAnon = CL;
         q.sub = 'Bass note low, chord above';
       } else {
-        const voiced = voice(c.ints, c.pc, inv, lhInv);
+        const useSmoothChord = g == 'chord' && $('vlead').checked;
+        const voiced = voice(
+          c.ints,
+          c.pc,
+          inv,
+          lhInv,
+          undefined,
+          useSmoothChord ? S.prevRh : null,
+          useSmoothChord,
+          useSmoothChord ? S.prevLh : null,
+        );
         q.exp = voiced.notes;
         q.hd = voiced.hd;
         q.lhLen = voiced.lhLen;
         q.rhLen = voiced.rhLen;
 
+        if (useSmoothChord) {
+          S.prevRh =
+            voiced.rhLen > 0
+              ? voiced.notes.slice(voiced.lhLen)
+              : null;
+          S.prevLh =
+            voiced.lhLen > 0
+              ? voiced.notes.slice(0, voiced.lhLen)
+              : null;
+        }
+
         const bh = curBh();
         const isBothSame = bh == 'same';
         const isBothDiff = bh == 'diff';
+        actualInv = useSmoothChord ? voiced.rhInv : inv;
+        actualLhInv = useSmoothChord ? voiced.lhInv : lhInv;
 
-        if (g == 'chord' && inv && cl != 'grand' && !/[\/·]/.test(c.name))
-          nme += '/' + pn((c.pc + c.ints[inv]) % 12);
+        if (g == 'chord' && actualInv && cl != 'grand' && !/[\/·]/.test(c.name))
+          nme += '/' + pn((c.pc + c.ints[actualInv]) % 12);
         if (g == 'chord') q.main = nme;
 
         const invDesc = isBothDiff
           ? `LH: ${INV[voiced.lhInv]} · RH: ${INV[voiced.rhInv]}`
-          : INV[isBothSame ? voiced.rhInv : inv];
+          : INV[isBothSame || useSmoothChord ? voiced.rhInv : inv];
 
         q.top = `${ctxT} · ${CL}`;
         q.topAnon = CL;
-        q.sub = (q.type ? 'Play the ' + q.type + ' · ' : '') + invDesc;
+        q.sub =
+          (q.type ? 'Play the ' + q.type + ' · ' : '') +
+          invDesc +
+          (useSmoothChord ? ' · close range' : '');
       }
 
       q.ans = nme + ' (' + q.exp.map((m: number) => sm(m).n).join(' ') + ')';
@@ -3527,14 +3666,194 @@ export function initPedagogue(): PedagogueController {
         ints: c.ints,
         base: c.base,
         pc: c.pc,
-        inv: g == 'slash' || c.v ? undefined : inv,
-        lhInv: curBh() == 'diff' ? lhInv : undefined,
+        inv: g == 'slash' || c.v ? undefined : actualInv,
+        lhInv: curBh() == 'diff' ? actualLhInv : undefined,
         d: c.d,
         bo: c.bo,
         v: c.v,
         ty: q.type,
         bp: q.bp,
       };
+    } else if (g == 'harm_close') {
+      // Close-range voice leading across two diatonic chords in the chosen key & mode
+      q.g = 'prog';
+      const sz = +$('size').value == 4 ? 4 : 3;
+      const degRoman = (deg: number, sf: string) => {
+        const baseRom = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'][deg];
+        const isMin = sf.startsWith('m') && !sf.startsWith('maj');
+        const isDim = sf.includes('dim') || sf.includes('m7♭5');
+        const isAug = sf.includes('aug') || sf.includes('♯5');
+        const rText = isMin || isDim ? baseRom.toLowerCase() : baseRom;
+        const qual = isDim ? (sz == 4 ? 'ø7' : '°') : isAug ? '+' : sz == 4 ? sf.replace(/^m/, '') : '';
+        return rText + qual;
+      };
+      const degNns = (deg: number, sf: string) => {
+        const num = String(deg + 1);
+        if (sf.includes('m7♭5')) return num + 'm7♭5';
+        if (sf.includes('dim')) return num + '°';
+        if (sf.startsWith('m') && !sf.startsWith('maj')) return num + 'm';
+        return num + sf;
+      };
+
+      let d1 = 0;
+      let d2 = 2;
+      if (ORD()) {
+        // Systematically pair I -> ii, iii, IV, V, vi, vii°, then ii -> ...
+        const pairIdx = S.n % 42;
+        d1 = Math.floor(pairIdx / 6);
+        const offset = (pairIdx % 6) + 1;
+        d2 = (d1 + offset) % 7;
+      } else {
+        d1 = rand(7);
+        d2 = (d1 + 1 + rand(6)) % 7;
+      }
+
+      const c1 = buildDiatonicChord(C, 'all', C.sc, d1, sz, 0, 0, 0);
+      const c2 = buildDiatonicChord(C, 'all', C.sc, d2, sz, 0, 0, 0);
+
+      const mx1 = Math.min(mi, c1.ints.length - 1);
+      const mxL1 = Math.min(lhi, c1.ints.length - 1);
+      const startInv = $('exinv').checked
+        ? mx1
+        : ORD()
+          ? Math.floor(S.n / 42) % (mx1 + 1)
+          : rand(mx1 + 1);
+      const startLhInv =
+        curBh() == 'diff'
+          ? $('exinv').checked
+            ? mxL1
+            : rand(mxL1 + 1)
+          : startInv;
+
+      // Anchor starting chord in comfortable middle register for both hands
+      const anchorRh = putVoiceLed(c1.ints, c1.pc, null, startInv, [57, 84]);
+      const anchorLhMin = Math.max(S.lo, 28);
+      const anchorLhMax = Math.max(anchorLhMin + 12, Math.min(62, anchorRh.notes[0] - 1));
+      const anchorLh = putVoiceLed(
+        c1.ints,
+        c1.pc,
+        null,
+        startLhInv,
+        [anchorLhMin, anchorLhMax],
+      );
+
+      let exp1: number[];
+      let hd1: string[];
+      let lhLen1 = 0;
+      let rhLen1 = 0;
+      let lhInv1 = startInv;
+      let rhInv1 = startInv;
+
+      if (cl == 'bass') {
+        const b1 = putVoiceLed(c1.ints, c1.pc, null, startInv, [28, 64]);
+        exp1 = b1.notes;
+        hd1 = exp1.map(() => 'L');
+        lhLen1 = exp1.length;
+        lhInv1 = b1.inv;
+        rhInv1 = b1.inv;
+      } else if (cl == 'treble') {
+        exp1 = anchorRh.notes;
+        hd1 = exp1.map(() => 'R');
+        rhLen1 = exp1.length;
+        rhInv1 = anchorRh.inv;
+      } else if (curBh() == 'same' || curBh() == 'diff') {
+        lhInv1 = curBh() == 'same' ? anchorRh.inv : anchorLh.inv;
+        exp1 = [...anchorLh.notes, ...anchorRh.notes];
+        hd1 = [...anchorLh.notes.map(() => 'L'), ...anchorRh.notes.map(() => 'R')];
+        lhLen1 = anchorLh.notes.length;
+        rhLen1 = anchorRh.notes.length;
+        rhInv1 = anchorRh.inv;
+      } else {
+        const bass1 = put([0], c1.pc, 0, [Math.max(S.lo, 36), Math.min(59, anchorRh.notes[0] - 1)]);
+        exp1 = [...bass1, ...anchorRh.notes];
+        hd1 = [...bass1.map(() => 'L'), ...anchorRh.notes.map(() => 'R')];
+        lhLen1 = bass1.length;
+        rhLen1 = anchorRh.notes.length;
+        lhInv1 = 0;
+        rhInv1 = anchorRh.inv;
+      }
+
+      const prevRh1 = rhLen1 > 0 ? exp1.slice(lhLen1) : null;
+      const prevLh1 = lhLen1 > 0 ? exp1.slice(0, lhLen1) : null;
+
+      // Target chord finds the closest inversion from Chord 1 in BOTH hands
+      const v2 = voice(
+        c2.ints,
+        c2.pc,
+        0,
+        0,
+        undefined,
+        prevRh1,
+        true,
+        prevLh1,
+        true,
+      );
+
+      const describeMotion = (fromNotes: number[], toNotes: number[]) => {
+        if (!fromNotes.length || fromNotes.length !== toNotes.length) return '';
+        const a = [...fromNotes].sort((x, y) => x - y);
+        const b = [...toNotes].sort((x, y) => x - y);
+        return a
+          .map((m, i) => {
+            const diff = b[i] - m;
+            return diff === 0
+              ? `${sm(m).n}=${sm(b[i]).n}`
+              : `${sm(m).n}→${sm(b[i]).n}`;
+          })
+          .join(', ');
+      };
+
+      const rh2 = v2.rhLen > 0 ? v2.notes.slice(v2.lhLen) : [];
+      const lh2 = v2.lhLen > 0 ? v2.notes.slice(0, v2.lhLen) : [];
+      const sampleFrom = prevRh1 && prevRh1.length ? prevRh1 : prevLh1 || [];
+      const sampleTo = rh2.length ? rh2 : lh2;
+      const motion = describeMotion(sampleFrom, sampleTo);
+
+      const startHint =
+        cl == 'grand' && curBh() == 'diff'
+          ? `LH: ${INV[lhInv1]} · RH: ${INV[rhInv1]}`
+          : cl == 'grand' && curBh() == 'bass'
+            ? `RH: ${INV[rhInv1]}`
+            : INV[rhInv1];
+      const targetInvText =
+        cl == 'grand' && curBh() == 'diff'
+          ? `LH: ${INV[v2.lhInv]} · RH: ${INV[v2.rhInv]}`
+          : cl == 'grand' && curBh() == 'bass'
+            ? `RH: ${INV[v2.rhInv]}`
+            : INV[v2.rhInv];
+
+      q.pn = 'Close-range voice leading';
+      q.rom = [degRoman(d1, c1.sf), degRoman(d2, c2.sf)];
+      q.nns = [degNns(d1, c1.sf), degNns(d2, c2.sf)];
+      q.nnsLine = `Close-range · ${q.nns[0]} – ${q.nns[1]}`;
+      q.ch = [
+        {
+          name: c1.name,
+          sf: c1.sf,
+          ints: c1.ints,
+          pc: c1.pc,
+          exp: exp1,
+          hd: hd1,
+          lhLen: lhLen1,
+          rhLen: rhLen1,
+          subHint: startHint,
+        },
+        {
+          name: c2.name,
+          sf: c2.sf,
+          ints: c2.ints,
+          pc: c2.pc,
+          exp: v2.notes,
+          hd: v2.hd,
+          lhLen: v2.lhLen,
+          rhLen: v2.rhLen,
+          subHint: 'find closest inversion from current position',
+        },
+      ];
+      q.lab = 'close-range voice leading';
+      q.ci = {k: 'prog'};
+      q.ans = `${c1.name} → ${c2.name} (${targetInvText}${motion ? ' · ' + motion : ''})`;
+      pset(q);
     } else if (g == 'harm_guide') {
       // Guide-tone targeting (3rds & 7ths of ii-V-I)
       q.g = 'prog';
@@ -3588,6 +3907,7 @@ export function initPedagogue(): PedagogueController {
       q.nnsLine = q.nns.join(' – ');
 
       let prevRh: number[] | null = null;
+      let prevLh: number[] | null = null;
       q.ch = P[1].map(([o, sf, bassO]) => {
         const x = Q.find(y => y[0] === sf)!;
         const pc = (C.r + o) % 12;
@@ -3607,8 +3927,10 @@ export function initPedagogue(): PedagogueController {
           forceBass,
           prevRh,
           smooth && bassO == null,
+          prevLh,
         );
         if (voiced.rhLen > 0) prevRh = voiced.notes.slice(voiced.lhLen);
+        if (voiced.lhLen > 0) prevLh = voiced.notes.slice(0, voiced.lhLen);
         return {
           name: pn(pc) + sf + slashTxt,
           sf,
@@ -4746,6 +5068,8 @@ export function initPedagogue(): PedagogueController {
     if (e.detail > 0) (e.currentTarget as HTMLElement).blur();
     S.go = true;
     S.n = 0;
+    S.prevRh = null;
+    S.prevLh = null;
     if (isCompactViewport()) $('app').classList.add('closed');
     next();
   };
@@ -5215,9 +5539,14 @@ export function initPedagogue(): PedagogueController {
           'exinv',
           'dir',
           'order',
+          'vlead',
+          'clef',
         ].includes(target.id)
-      )
+      ) {
         S.n = 0;
+        S.prevRh = null;
+        S.prevLh = null;
+      }
 
       vis();
 
