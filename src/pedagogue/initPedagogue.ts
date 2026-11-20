@@ -3935,6 +3935,7 @@ export function initPedagogue(): PedagogueController {
         q.lhLen = voiced.lhLen;
         q.rhLen = voiced.rhLen;
         q.isRelChord = useSmoothChord;
+        q.relHasPrev = useSmoothChord && hasPrev;
         q.isRelAnchored = useSmoothChord && (tolExact || S.relLocked);
 
         const bh = curBh();
@@ -4711,9 +4712,11 @@ export function initPedagogue(): PedagogueController {
       const desc = tolExact ? q.startDesc : q.startDescAny || '';
       if (desc) subMeta = ` · ${desc}`;
     } else if (nameOk && q.g != 'ear' && q.exp?.length) {
+      const isRelFollowUp =
+        !!q.relHasPrev || (q.g == 'prog' && !!q.relProg && q.pos > 0);
       if (q.g == 'int' || q.g == 'mel') {
         subMeta = tolExact ? ' · exact octave' : '';
-      } else if (tolExact) {
+      } else if (tolExact && !isRelFollowUp) {
         const lhNotes = q.hd
           ? q.exp.filter((_: number, i: number) => q.hd[i] == 'L')
           : q.lhLen > 0
