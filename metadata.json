@@ -1,0 +1,6 @@
+{
+  "name": "Pedagogue",
+  "description": "Offline-capable interactive piano and music theory practice trainer with Web MIDI, SVG notation, fingering, and ear training.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
