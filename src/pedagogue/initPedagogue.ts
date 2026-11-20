@@ -945,21 +945,57 @@ export function initPedagogue(): PedagogueController {
           : [28, 64];
   };
 
-  function makeVoicingMidi(ints: number[], pc: number, inv: number, oct: number) {
-    const a = ints.map(x => 12 * (oct + 1) + pc + x);
-    for (let i = 0; i < inv; i++) a.push(a.shift()! + 12);
-    return [...new Set(a)].sort((x, y) => x - y);
+  function makeVoicingMidi(
+    ints: number[],
+    pc: number,
+    inv: number,
+    oct: number,
+    drop2Base?: number[],
+  ): number[] {
+    if (drop2Base && drop2Base.length >= 4) {
+      const close = makeVoicingMidi(drop2Base, 0, inv % drop2Base.length, oct);
+      return [close[2] - 12, close[0], close[1], close[3]].map(
+        m => m + pc,
+      );
+    }
+    const rootMidi = 12 * (oct + 1) + pc;
+    if (inv <= 0) {
+      return [...new Set(ints.map(x => rootMidi + x))].sort((x, y) => x - y);
+    }
+    const hasCompound = ints.some(x => x < 0 || x >= 12);
+    if (!hasCompound) {
+      const a = ints.map(x => rootMidi + x);
+      for (let i = 0; i < inv; i++) a.push(a.shift()! + 12);
+      return [...new Set(a)].sort((x, y) => x - y);
+    }
+    // For compound chords (9th/11th/13th/add9), invert into close position with the target tone genuinely in the bass
+    const targetIdx = inv % ints.length;
+    const bassOff = ((ints[targetIdx] % 12) + 12) % 12;
+    const offsets = ints.map(x => {
+      const p = ((x % 12) + 12) % 12;
+      return p >= bassOff ? p : p + 12;
+    });
+    return [...new Set(offsets.map(o => rootMidi + o))].sort((x, y) => x - y);
   }
 
-  function put(ints: number[], pc: number, inv: number, z: number[]) {
+  function put(
+    ints: number[],
+    pc: number,
+    inv: number,
+    z: number[],
+    drop2Base?: number[],
+  ) {
     const fit = (a: number[], l: number, h: number) =>
       a[0] >= l && a.at(-1)! <= h;
     const A: number[][] = [];
-    for (let o = -1; o < 9; o++) A.push(makeVoicingMidi(ints, pc, inv, o));
+    for (let o = -1; o < 9; o++)
+      A.push(makeVoicingMidi(ints, pc, inv, o, drop2Base));
 
     let c = A.filter(a => fit(a, Math.max(S.lo, z[0]), Math.min(S.hi, z[1])));
     if (!c.length) c = A.filter(a => fit(a, S.lo, S.hi));
-    return c.length ? c[rand(c.length)] : makeVoicingMidi(ints, pc, inv, 4);
+    return c.length
+      ? c[rand(c.length)]
+      : makeVoicingMidi(ints, pc, inv, 4, drop2Base);
   }
 
   // Picks octave/inversion closest to previous chord notes for close-range voice leading
@@ -971,6 +1007,7 @@ export function initPedagogue(): PedagogueController {
     zone: [number, number] = [57, 81],
     maxInvLimit?: number,
     homeAvg?: number | null,
+    drop2Base?: number[],
   ): {notes: number[]; inv: number} {
     const cap = maxInvLimit != null ? maxInvLimit : +$('inv').value;
     const invs =
@@ -990,7 +1027,7 @@ export function initPedagogue(): PedagogueController {
       const inv = invs[0];
       const cands: number[][] = [];
       for (let o = 0; o <= 8; o++) {
-        const a = makeVoicingMidi(ints, pc, inv, o);
+        const a = makeVoicingMidi(ints, pc, inv, o, drop2Base);
         if (a[0] >= loBound && a.at(-1)! <= hiBound) cands.push(a);
       }
       if (cands.length) {
@@ -1001,45 +1038,74 @@ export function initPedagogue(): PedagogueController {
         });
         return {notes: cands[0], inv};
       }
-      return {notes: put(ints, pc, inv, [loBound, hiBound]), inv};
+      return {
+        notes: put(ints, pc, inv, [loBound, hiBound], drop2Base),
+        inv,
+      };
     }
 
     const prevSorted = [...prevNotes].sort((a, b) => a - b);
     const prevAvg = prevSorted.reduce((s, n) => s + n, 0) / prevSorted.length;
     const searchLo = Math.max(S.lo, Math.min(loBound, prevSorted[0] - 12));
-    const searchHi = Math.min(S.hi, Math.max(hiBound, prevSorted[prevSorted.length - 1] + 12));
-    let best: {notes: number[]; inv: number; cost: number} | null = null;
+    const searchHi = Math.min(
+      S.hi,
+      Math.max(hiBound, prevSorted[prevSorted.length - 1] + 12),
+    );
+    const scoreCand = (a: number[]) => {
+      const avg = a.reduce((s, n) => s + n, 0) / a.length;
+      let dist = Math.abs(avg - prevAvg) * 0.12;
+      if (homeAvg != null) dist += Math.abs(avg - homeAvg) * 0.08;
+      if (a.length === prevSorted.length) {
+        for (let i = 0; i < a.length; i++) {
+          dist += Math.abs(a[i] - prevSorted[i]);
+        }
+      } else {
+        for (const n of a) {
+          let minD = 99;
+          for (const p of prevSorted) minD = Math.min(minD, Math.abs(n - p));
+          dist += minD;
+        }
+      }
+      return dist;
+    };
 
+    let best: {notes: number[]; inv: number; cost: number} | null = null;
     for (const inv of invs) {
       for (let o = -1; o <= 8; o++) {
-        const a = makeVoicingMidi(ints, pc, inv, o);
+        const a = makeVoicingMidi(ints, pc, inv, o, drop2Base);
         if (a[0] < searchLo || a.at(-1)! > searchHi) continue;
         // Respect caller's upper hand ceiling when LH must stay below RH
-        if (zone[1] < 80 && a.at(-1)! > hiBound && prevSorted[prevSorted.length - 1] <= hiBound)
+        if (
+          zone[1] < 80 &&
+          a.at(-1)! > hiBound &&
+          prevSorted[prevSorted.length - 1] <= hiBound
+        )
           continue;
         if (a.at(-1)! > zHi && zHi < 70) continue;
-        const avg = a.reduce((s, n) => s + n, 0) / a.length;
-        let dist = Math.abs(avg - prevAvg) * 0.12;
-        if (homeAvg != null) dist += Math.abs(avg - homeAvg) * 0.08;
-        if (a.length === prevSorted.length) {
-          // Exact voice-to-voice finger travel distance
-          for (let i = 0; i < a.length; i++) {
-            dist += Math.abs(a[i] - prevSorted[i]);
-          }
-        } else {
-          for (const n of a) {
-            let minD = 99;
-            for (const p of prevSorted) minD = Math.min(minD, Math.abs(n - p));
-            dist += minD;
-          }
-        }
+        const dist = scoreCand(a);
         if (!best || dist < best.cost) best = {notes: a, inv, cost: dist};
+      }
+    }
+
+    // Wide chords (11th/13th/open) may sit slightly outside the tight ±12 window while staying inside keyboard & hand ceiling
+    if (!best) {
+      for (const inv of invs) {
+        for (let o = -1; o <= 8; o++) {
+          const a = makeVoicingMidi(ints, pc, inv, o, drop2Base);
+          if (a[0] < S.lo || a.at(-1)! > S.hi) continue;
+          if (zHi < 70 && a.at(-1)! > zHi) continue;
+          const dist = scoreCand(a);
+          if (!best || dist < best.cost) best = {notes: a, inv, cost: dist};
+        }
       }
     }
 
     if (best) return {notes: best.notes, inv: best.inv};
     const fallbackInv = invs[0];
-    return {notes: put(ints, pc, fallbackInv, [loBound, hiBound]), inv: fallbackInv};
+    return {
+      notes: put(ints, pc, fallbackInv, [loBound, hiBound], drop2Base),
+      inv: fallbackInv,
+    };
   }
 
   interface VoicedChord {
@@ -1070,22 +1136,43 @@ export function initPedagogue(): PedagogueController {
     allowAllInv?: boolean,
     homeRhAvg?: number | null,
     homeLhAvg?: number | null,
+    maxInvOverride?: number,
+    drop2Base?: number[],
   ): VoicedChord {
     const c = $('clef').value;
-    const maxRhInv = allowAllInv || smooth ? ints.length - 1 : undefined;
+    const maxRhInv =
+      maxInvOverride != null
+        ? Math.min(maxInvOverride, ints.length - 1)
+        : allowAllInv || smooth
+          ? ints.length - 1
+          : undefined;
     const maxLhInv =
-      allowAllInv || smooth
-        ? ints.length - 1
-        : Math.min(+$('lhinv').value, ints.length - 1);
+      maxInvOverride != null
+        ? Math.min(maxInvOverride, ints.length - 1)
+        : allowAllInv || smooth
+          ? ints.length - 1
+          : Math.min(+$('lhinv').value, ints.length - 1);
 
     if (c == 'bass') {
       const bZone: [number, number] =
         smooth && prevLh && prevLh.length
-          ? [Math.max(S.lo, prevLh[0] - 12), Math.min(S.hi, prevLh[prevLh.length - 1] + 12)]
+          ? [
+              Math.max(S.lo, prevLh[0] - 12),
+              Math.min(S.hi, prevLh[prevLh.length - 1] + 12),
+            ]
           : [36, 59];
       const lhObj = smooth
-        ? putVoiceLed(ints, pc, prevLh || null, undefined, bZone, maxRhInv, homeLhAvg)
-        : {notes: put(ints, pc, inv, [28, 64]), inv};
+        ? putVoiceLed(
+            ints,
+            pc,
+            prevLh || null,
+            undefined,
+            bZone,
+            maxRhInv,
+            homeLhAvg,
+            drop2Base,
+          )
+        : {notes: put(ints, pc, inv, [28, 64], drop2Base), inv};
       return {
         notes: lhObj.notes,
         hd: lhObj.notes.map(() => 'L'),
@@ -1098,11 +1185,23 @@ export function initPedagogue(): PedagogueController {
     if (c == 'treble') {
       const rZone: [number, number] =
         smooth && prevRh && prevRh.length
-          ? [Math.max(S.lo, prevRh[0] - 12), Math.min(S.hi, prevRh[prevRh.length - 1] + 12)]
+          ? [
+              Math.max(S.lo, prevRh[0] - 12),
+              Math.min(S.hi, prevRh[prevRh.length - 1] + 12),
+            ]
           : [57, 81];
       const rhObj = smooth
-        ? putVoiceLed(ints, pc, prevRh || null, undefined, rZone, maxRhInv, homeRhAvg)
-        : {notes: put(ints, pc, inv, [57, 96]), inv};
+        ? putVoiceLed(
+            ints,
+            pc,
+            prevRh || null,
+            undefined,
+            rZone,
+            maxRhInv,
+            homeRhAvg,
+            drop2Base,
+          )
+        : {notes: put(ints, pc, inv, [57, 96], drop2Base), inv};
       return {
         notes: rhObj.notes,
         hd: rhObj.notes.map(() => 'R'),
@@ -1117,11 +1216,23 @@ export function initPedagogue(): PedagogueController {
     const bh = curBh();
     const rZone: [number, number] =
       smooth && prevRh && prevRh.length
-        ? [Math.max(S.lo, prevRh[0] - 12), Math.min(S.hi, prevRh[prevRh.length - 1] + 12)]
+        ? [
+            Math.max(S.lo, prevRh[0] - 12),
+            Math.min(S.hi, prevRh[prevRh.length - 1] + 12),
+          ]
         : [57, 81];
     const rhObj = smooth
-      ? putVoiceLed(ints, pc, prevRh || null, undefined, rZone, maxRhInv, homeRhAvg)
-      : {notes: put(ints, pc, inv, [58, 96]), inv};
+      ? putVoiceLed(
+          ints,
+          pc,
+          prevRh || null,
+          undefined,
+          rZone,
+          maxRhInv,
+          homeRhAvg,
+          drop2Base,
+        )
+      : {notes: put(ints, pc, inv, [58, 96], drop2Base), inv};
     const r = rhObj.notes;
 
     if (bh == 'same' || bh == 'diff') {
@@ -1129,7 +1240,13 @@ export function initPedagogue(): PedagogueController {
       const lMax = Math.max(lMin + 12, Math.min(62, r[0] - 1));
       const lZone: [number, number] =
         smooth && prevLh && prevLh.length
-          ? [Math.max(S.lo, prevLh[0] - 12), Math.min(r[0] - 1, Math.max(lMax, prevLh[prevLh.length - 1] + 12))]
+          ? [
+              Math.max(S.lo, prevLh[0] - 12),
+              Math.min(
+                r[0] - 1,
+                Math.max(lMax, prevLh[prevLh.length - 1] + 12),
+              ),
+            ]
           : [Math.max(lMin, 36), Math.min(lMax, 59)];
       let l: number[];
       let lInv: number;
@@ -1144,6 +1261,7 @@ export function initPedagogue(): PedagogueController {
             lZone,
             maxLhInv,
             homeLhAvg,
+            drop2Base,
           );
           l = lhObj.notes;
           lInv = lhObj.inv;
@@ -1156,13 +1274,14 @@ export function initPedagogue(): PedagogueController {
             lZone,
             undefined,
             homeLhAvg,
+            drop2Base,
           );
           l = lhObj.notes;
           lInv = rhObj.inv;
         }
       } else {
         lInv = bh == 'same' ? rhObj.inv : lhInvOverride ?? inv;
-        l = put(ints, pc, lInv, [lMin, lMax]);
+        l = put(ints, pc, lInv, [lMin, lMax], drop2Base);
       }
 
       const all = [...l, ...r];
@@ -3794,11 +3913,13 @@ export function initPedagogue(): PedagogueController {
           q.prevLh = S.prevLh ? [...S.prevLh] : null;
         }
 
+        const isFixedShapeVoicing = c.v == 'open' || c.v == 'quartal';
+        const isDrop2Voicing = c.v == 'drop2';
         const voiced = voice(
           c.ints,
           c.pc,
-          useSmoothChord && !hasPrev ? 0 : inv,
-          useSmoothChord && !hasPrev ? 0 : lhInv,
+          isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : inv,
+          isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : lhInv,
           undefined,
           useSmoothChord ? S.prevRh : null,
           useSmoothChord,
@@ -3806,6 +3927,8 @@ export function initPedagogue(): PedagogueController {
           useSmoothChord,
           useSmoothChord ? S.homeRhAvg : null,
           useSmoothChord ? S.homeLhAvg : null,
+          isFixedShapeVoicing ? 0 : undefined,
+          isDrop2Voicing ? c.base : undefined,
         );
         q.exp = voiced.notes;
         q.hd = voiced.hd;
@@ -3817,8 +3940,8 @@ export function initPedagogue(): PedagogueController {
         const bh = curBh();
         const isBothSame = bh == 'same';
         const isBothDiff = bh == 'diff';
-        actualInv = useSmoothChord ? voiced.rhInv : inv;
-        actualLhInv = useSmoothChord ? voiced.lhInv : lhInv;
+        actualInv = isFixedShapeVoicing ? 0 : useSmoothChord ? voiced.rhInv : inv;
+        actualLhInv = isFixedShapeVoicing ? 0 : useSmoothChord ? voiced.lhInv : lhInv;
 
         // Only pre-seed Exact-octave chain on newQ; Any-octave locks once the player plays the start chord
         if (useSmoothChord && tolExact && !hasPrev) {
@@ -3837,20 +3960,38 @@ export function initPedagogue(): PedagogueController {
           S.relLocked = true;
         }
 
+        const mainLowNote =
+          voiced.rhLen > 0 ? voiced.notes[voiced.lhLen] : voiced.notes[0];
         const slashNme =
-          g == 'chord' && actualInv && cl != 'grand' && !/[\/·]/.test(c.name)
-            ? nme + '/' + pn((c.pc + c.ints[actualInv]) % 12)
+          g == 'chord' &&
+          actualInv &&
+          cl != 'grand' &&
+          !/[\/·]/.test(c.name) &&
+          mainLowNote != null &&
+          mainLowNote % 12 != c.pc
+            ? nme + '/' + pn(mainLowNote % 12)
             : nme;
 
         if (g == 'chord') {
           q.main = useSmoothChord && hasPrev ? nme : slashNme;
         }
 
+        const invLabel = (iv: number) =>
+          isFixedShapeVoicing
+            ? c.v + ' stack'
+            : c.v?.startsWith('rootless')
+              ? iv === 0
+                ? 'Type A'
+                : iv === 2
+                  ? 'Type B'
+                  : INV[iv]
+              : INV[iv];
+
         const invDesc = isBothDiff
-          ? `LH: ${INV[voiced.lhInv]} · RH: ${INV[voiced.rhInv]}`
+          ? `LH: ${invLabel(voiced.lhInv)} · RH: ${invLabel(voiced.rhInv)}`
           : cl == 'grand' && bh == 'bass'
-            ? `RH: ${INV[useSmoothChord ? voiced.rhInv : inv]}`
-            : INV[isBothSame || useSmoothChord ? voiced.rhInv : inv];
+            ? `RH: ${invLabel(useSmoothChord ? voiced.rhInv : inv)}`
+            : invLabel(isBothSame || useSmoothChord ? voiced.rhInv : inv);
 
         q.top = `${ctxT} · ${CL}`;
         q.topAnon = CL;
