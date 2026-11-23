@@ -1,10 +1,4 @@
-import {
-  ArrowRight,
-  BookOpen,
-  Clock,
-  Hourglass,
-  RotateCcw,
-} from 'lucide-react';
+import {BookOpen, Clock, Hourglass} from 'lucide-react';
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {
   CurriculumModal,
@@ -174,7 +168,7 @@ export default function App() {
         )}
 
         <PWAInstallButton />
-        <span id="midi" className="midi-status">
+        <span id="midi" className="chip">
           Looking for MIDI…
         </span>
       </header>
@@ -183,59 +177,59 @@ export default function App() {
         <main className="home-stage">
           <div className="home-inner">
             <div className="home-intro">
-              <h1 className="home-title">Choose your session</h1>
+              <h1 className="home-title">Select a workspace</h1>
             </div>
 
-            <div className="home-columns">
-              <section className="home-col">
-                <div className="home-col-head">
-                  <span className="home-col-num">01</span>
-                  <h2 className="home-col-h2">Learn</h2>
-                </div>
-                <p className="home-col-desc">
-                  Study chords, voicings, scales, and the 52-week curriculum at
-                  your own pace with illuminated keys and open details.
+            <div className="home-cards">
+              <article className="home-card home-card-learn">
+                <h2 className="home-card-h2">Learn</h2>
+                <p className="home-card-desc">
+                  Guided study with open details, lit keyboard diagrams, audio
+                  playback, and the 52-week curriculum.
                 </p>
-                <div className="home-col-foot">
+                <p className="home-card-tags">
+                  Open details · 52-week curriculum · Untimed
+                </p>
+
+                <div className="home-card-foot">
+                  <span className="home-card-meta">
+                    {curStats.done}/{curStats.total} topics studied
+                  </span>
                   <button
                     type="button"
-                    className="s home-cta-secondary"
+                    className="home-cta"
                     onClick={() => enterLearn()}
                   >
-                    <span>Enter Learn</span>
-                    <ArrowRight size={15} />
+                    Open Learn
                   </button>
-                  <span className="home-col-meta">
-                    {curStats.done}/{curStats.total} studied
-                  </span>
                 </div>
-              </section>
+              </article>
 
-              <section className="home-col">
-                <div className="home-col-head">
-                  <span className="home-col-num">02</span>
-                  <h2 className="home-col-h2">Practice</h2>
-                </div>
-                <p className="home-col-desc">
-                  Test recall, inversions, progressions, harmony, and ear
-                  training with optional timers and voice-leading drills.
+              <article className="home-card home-card-practice">
+                <h2 className="home-card-h2">Practice</h2>
+                <p className="home-card-desc">
+                  Hidden-answer recall across chords, scales, intervals,
+                  progressions, harmony, and ear training.
                 </p>
-                <div className="home-col-foot">
+                <p className="home-card-tags">
+                  Timed or untimed · Voice leading &amp; fingering
+                </p>
+
+                <div className="home-card-foot">
+                  <span className="home-card-meta">
+                    {scoreSnap.tot > 0
+                      ? `${scoreSnap.ok}/${scoreSnap.tot} · Best streak ${scoreSnap.best}`
+                      : 'MIDI & keyboard ready'}
+                  </span>
                   <button
                     type="button"
                     className="home-cta"
                     onClick={() => enterPractice()}
                   >
-                    <span>Start Practice</span>
-                    <ArrowRight size={15} />
+                    Open Practice
                   </button>
-                  <span className="home-col-meta">
-                    {scoreSnap.tot > 0
-                      ? `${scoreSnap.ok}/${scoreSnap.tot} · Best ${scoreSnap.best}`
-                      : 'MIDI & keyboard ready'}
-                  </span>
                 </div>
-              </section>
+              </article>
             </div>
           </div>
         </main>
@@ -461,7 +455,6 @@ export default function App() {
             <div className="kb-wrap" id="kbwrap">
               <div id="kbcd" className="kb-cd" hidden>
                 <div className="kb-cd-pill">
-                  <span className="kb-cd-dot" />
                   <span id="kbcdtxt">5.0s</span>
                 </div>
                 <div className="kb-cd-track">
@@ -542,9 +535,6 @@ export default function App() {
         >
           <div className="card confirm-dialog">
             <div className="confirm-head">
-              <div className="confirm-icon">
-                <RotateCcw size={18} />
-              </div>
               <div>
                 <h2 id="reset-modal-title">Reset practice session?</h2>
                 <p className="confirm-sub">{resetModalSnap.gameLabel}</p>

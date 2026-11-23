@@ -1098,17 +1098,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const sorted = [...notes].sort((a, b) => a - b);
     const sc = C?.sc || [0, 2, 4, 5, 7, 9, 11];
     const r = C?.r ?? 0;
-    const lo = Math.max(
-      S.lo,
-      Math.min(scaleStepFrom(sorted[0], -1, sc, r), sorted[0] - 2),
-    );
-    const hi = Math.min(
-      S.hi,
-      Math.max(
-        scaleStepFrom(sorted[sorted.length - 1], 1, sc, r),
-        sorted[sorted.length - 1] + 2,
-      ),
-    );
+    const lo = Math.max(S.lo, scaleStepFrom(sorted[0], -1, sc, r));
+    const hi = Math.min(S.hi, scaleStepFrom(sorted[sorted.length - 1], 1, sc, r));
     return [lo, Math.max(lo + 4, hi)];
   }
 
@@ -1192,19 +1183,13 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       if (homeAvg != null && S.rangeLocked) dist += Math.abs(avg - homeAvg) * 0.08;
       if (a.length === prevSorted.length) {
         for (let i = 0; i < a.length; i++) {
-          const d = Math.abs(a[i] - prevSorted[i]);
-          dist += d + d * d * 0.04;
+          dist += Math.abs(a[i] - prevSorted[i]);
         }
       } else {
         for (const n of a) {
           let minD = 99;
           for (const p of prevSorted) minD = Math.min(minD, Math.abs(n - p));
-          dist += minD + minD * minD * 0.03;
-        }
-        for (const p of prevSorted) {
-          let minD = 99;
-          for (const n of a) minD = Math.min(minD, Math.abs(n - p));
-          dist += minD * 0.45;
+          dist += minD;
         }
       }
       return dist;
@@ -2516,6 +2501,34 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     return out;
   }
 
+  function bassNoteF(
+    m: number,
+    h: string,
+    prevChord?: {ns: number[]; f: (number | string)[]} | null,
+  ): number {
+    const def = h == 'L' ? 5 : 1;
+    if (!prevChord || prevChord.ns.length !== 1) return def;
+    const prevM = prevChord.ns[0];
+    const prevF = Number(prevChord.f[0]);
+    if (!Number.isFinite(prevF) || prevF < 1 || prevF > 5) return def;
+    const diff = m - prevM;
+    if (diff === 0) return prevF;
+    // Reset to natural anchor on larger leaps (4th+)
+    if (Math.abs(diff) > 5) {
+      if (h == 'L') return BK(m) && diff > 0 ? 4 : 5;
+      return BK(m) && diff < 0 ? 2 : 1;
+    }
+    // Stepwise / 3rd bass voice-leading motion
+    const dir = h == 'L' ? -Math.sign(diff) : Math.sign(diff);
+    const stepShift = Math.abs(diff) <= 2 ? 1 : 2;
+    const cand = prevF + dir * stepShift;
+    if (cand >= 1 && cand <= 5) {
+      if (BK(m) && cand === 1 && stepShift === 1) return 2;
+      return cand;
+    }
+    return def;
+  }
+
   function chordF(
     ns: number[],
     h: string,
@@ -2526,87 +2539,34 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (!n) return [];
     if (n == 1) return [h == 'L' ? 5 : 1];
 
-    const ANAT: Record<number, number> = {
-      1: 0,
-      2: 2.2,
-      3: 4.0,
-      4: 5.5,
-      5: 7.2,
-    };
-    const handDir = h == 'R' ? 1 : -1;
-    const hasPrev = !!(
-      prevNs &&
-      prevF &&
-      prevNs.length > 0 &&
-      prevNs.length === prevF.length
-    );
-
-    let prevThumbEst: number | null = null;
-    const prevByFinger: Record<number, number> = {};
-    if (hasPrev) {
-      let sum = 0;
-      let cnt = 0;
-      prevNs!.forEach((pm, idx) => {
-        const pf = Number(prevF![idx]);
-        if (pf >= 1 && pf <= 5) {
-          prevByFinger[pf] = pm;
-          sum += pm - handDir * ANAT[pf];
-          cnt++;
-        }
-      });
-      if (cnt > 0) prevThumbEst = sum / cnt;
-    }
-
-    const continuityCost = (handF: number[], candThumbFirst: number[]) => {
-      if (!hasPrev || prevThumbEst == null) return 0;
-      let cost = 0;
-      let candSum = 0;
-
+    const vlVoiceCost = (cand: number[]) => {
+      if (!prevNs || !prevF || prevNs.length !== prevF.length) return 0;
+      const handF = h == 'L' ? [...cand].reverse() : cand;
+      let adj = 0;
       ns.forEach((m, idx) => {
-        const f = handF[idx];
-        candSum += m - handDir * ANAT[f];
-
-        const pIdx = prevNs!.indexOf(m);
-        if (pIdx >= 0) {
-          const pf = Number(prevF![pIdx]);
-          if (pf === f) cost -= 1.25;
-          else cost += 0.35;
+        const pIdx = prevNs.indexOf(m);
+        if (pIdx >= 0 && prevF[pIdx] === handF[idx]) {
+          adj -= 0.42;
         }
-
-        const prevKey =
-          prevByFinger[f] != null
-            ? prevByFinger[f]
-            : prevThumbEst! + handDir * ANAT[f];
-        cost += Math.abs(m - prevKey) * 0.42;
       });
-
-      const candThumbEst = candSum / ns.length;
-      const handShift = Math.abs(candThumbEst - prevThumbEst);
-      cost += handShift * 0.55;
-
-      // Only lift off the thumb when keeping hand in place genuinely reduces shift;
-      // if the progression moves far enough to require re-centering, prefer thumb-anchored
-      if (candThumbFirst[0] > 1 && handShift >= 2.5) {
-        cost += 0.45;
+      if (prevNs.length === ns.length) {
+        for (let i = 0; i < n; i++) {
+          const d = Math.abs(ns[i] - prevNs[i]);
+          if (d > 0 && d <= 2) {
+            const fDiff = Math.abs(handF[i] - Number(prevF[i]));
+            if (fDiff === 0) adj -= 0.14;
+            else if (fDiff === 1) adj -= 0.06;
+            else if (fDiff >= 2) adj += 0.22;
+          }
+        }
       }
-      return cost;
+      return adj;
     };
 
-    const sp = ns[n - 1] - ns[0];
     if (n == 2) {
-      const ideal2: Record<string, [number, number]> = {
-        '1,2': [1, 5],
-        '1,3': [3, 6],
-        '1,4': [5, 8],
-        '1,5': [6, 12],
-        '2,3': [1, 4],
-        '2,4': [2, 5],
-        '2,5': [4, 8],
-        '3,4': [1, 3],
-        '3,5': [2, 5],
-        '4,5': [1, 3],
-      };
-      const cands2: [number, number][] = [
+      const sp = ns[1] - ns[0];
+      const orientedNotes = h == 'R' ? ns : [...ns].reverse();
+      const cands: [number, number][] = [
         [1, 2],
         [1, 3],
         [1, 4],
@@ -2614,33 +2574,28 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         [2, 3],
         [2, 4],
         [2, 5],
-        [3, 4],
         [3, 5],
-        [4, 5],
       ];
-      const orientedNotes = h == 'R' ? ns : [...ns].reverse();
-      let bestF: [number, number] =
-        sp <= 2 ? [1, 2] : sp <= 4 ? [1, 3] : sp <= 6 ? [1, 4] : [1, 5];
+      const ideal2: Record<string, [number, number]> = {
+        '1,2': [1, 4],
+        '1,3': [2, 6],
+        '1,4': [4, 8],
+        '1,5': [6, 12],
+        '2,3': [1, 3],
+        '2,4': [2, 5],
+        '2,5': [4, 8],
+        '3,5': [2, 4],
+      };
+      let bestF: [number, number] = [1, 3];
       let bestScore = 1e9;
-
-      for (const cand of cands2) {
-        const [lo, hi] = ideal2[`${cand[0]},${cand[1]}`] || [1, 5];
+      for (const cand of cands) {
+        const [lo, hi] = ideal2[`${cand[0]},${cand[1]}`];
         let score =
-          sp < lo ? (lo - sp) * 1.4 : sp > hi ? (sp - hi) * 2.1 : 0;
-
-        if (!hasPrev) {
-          if (cand[0] > 1) score += 0.6;
-          if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-            score += 0.65;
-        } else {
-          if (cand[0] > 1) score += 0.14;
-          if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-            score += 0.75;
-        }
-
-        const handF = h == 'L' ? [...cand].reverse() : cand;
-        score += continuityCost(handF, cand);
-
+          sp < lo ? (lo - sp) * 1.5 : sp > hi ? (sp - hi) * 2.2 : 0;
+        if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
+          score += 0.9;
+        if (cand[0] > 1) score += 0.25;
+        score += vlVoiceCost(cand);
         if (score < bestScore) {
           bestScore = score;
           bestF = cand;
@@ -2655,34 +2610,32 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       // Orient gaps & notes from thumb-side -> pinky-side so both hands share the ergonomic model
       const g = h == 'R' ? [d1, d2] : [d2, d1];
       const orientedNotes = h == 'R' ? ns : [...ns].reverse();
-      const totalSpan = g[0] + g[1];
       const cands: [number, number, number][] = [
         [1, 3, 5],
         [1, 2, 5],
-        [1, 2, 4],
         [1, 4, 5],
-        [1, 3, 4],
+        [1, 2, 4],
         [1, 2, 3],
         [2, 3, 5],
         [2, 4, 5],
-        [2, 3, 4],
       ];
 
       const pairCost3 = (fA: number, fB: number, gap: number) => {
         const ideal: Record<string, [number, number]> = {
           '1,2': [1, 5],
           '1,3': [3, 6],
-          '1,4': [5, 8],
-          '2,3': [1, 4],
-          '2,4': [2, 6],
-          '2,5': [4, 8],
-          '3,4': [1, 3],
+          '1,4': [4, 8],
+          '2,3': [1, 3],
+          '2,4': [2, 5],
+          '2,5': [4, 7],
+          '3,4': [1, 2],
+          // Keep 3-5 inside a major 3rd so 1st-inv RH & 2nd-inv LH triads use 1-2-5 / 5-2-1
           '3,5': [2, 4],
           '4,5': [1, 3],
         };
         const [lo, hi] = ideal[`${fA},${fB}`] || [1, 4];
         if (gap < lo) return (lo - gap) * 1.4;
-        if (gap > hi) return (gap - hi) * 1.9;
+        if (gap > hi) return (gap - hi) * 2.1;
         return 0;
       };
 
@@ -2694,31 +2647,20 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           pairCost3(cand[0], cand[1], g[0]) +
           pairCost3(cand[1], cand[2], g[1]);
 
-        // Guard outer finger spans for close sub-hand positions (e.g. 2-4-5, 2-3-4, 1-2-4)
-        if (cand[0] === 2 && cand[2] === 5 && totalSpan > 8)
-          score += (totalSpan - 8) * 1.1;
-        if (cand[0] === 2 && cand[2] === 4 && totalSpan > 6)
-          score += (totalSpan - 6) * 1.3;
-        if (cand[0] === 1 && cand[2] === 4 && totalSpan > 9)
-          score += (totalSpan - 9) * 0.9;
-        if (cand[0] === 1 && cand[2] === 3 && totalSpan > 6)
-          score += (totalSpan - 6) * 1.1;
-
-        // Neutral ergonomic shape tie-breakers (stronger on first chord, subtle during voice leading)
-        const isFirstInvLike = g[1] >= 5 && g[0] <= 4;
-        if (cand[0] === 1 && cand[1] === 2 && cand[2] === 5 && isFirstInvLike)
-          score -= hasPrev ? 0.12 : 0.25;
-        if (cand[0] === 1 && cand[1] === 3 && cand[2] === 5 && !isFirstInvLike)
-          score -= hasPrev ? 0.05 : 0.18;
+        // Slight default preference on neutral ties
+        if (cand[0] === 1 && cand[1] === 3 && cand[2] === 5) score -= 0.12;
+        if (cand[0] === 1 && cand[1] === 2 && cand[2] === 5) score -= 0.08;
         if (cand[0] === 1 && cand[1] === 2 && cand[2] === 3 && g[0] <= 2 && g[1] <= 2)
           score -= 0.3;
-
-        if (cand[0] > 1) score += hasPrev ? 0.14 : 0.45;
+        // Avoid non-thumb base unless thumb would sit on a black key next to a white inner note
+        if (cand[0] > 1) score += 0.35;
         if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-          score += 0.85;
+          score += 1.05;
+        // Prefer 1-2-4 over putting pinky (5) on a black key when inner note is white
+        if (cand[2] === 5 && BK(orientedNotes[2]) && !BK(orientedNotes[1]))
+          score += 0.45;
 
-        const handF = h == 'L' ? [...cand].reverse() : cand;
-        score += continuityCost(handF, cand);
+        score += vlVoiceCost(cand);
 
         if (score < bestScore) {
           bestScore = score;
@@ -2732,17 +2674,19 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       const d1 = ns[1] - ns[0];
       const d2 = ns[2] - ns[1];
       const d3 = ns[3] - ns[2];
-      // Orient gaps from thumb-side -> pinky-side so both hands use the same ergonomic model
+      const span = ns[3] - ns[0];
+      // Orient gaps & notes from thumb-side -> pinky-side so both hands use the same ergonomic model
       const g = h == 'R' ? [d1, d2, d3] : [d3, d2, d1];
-      const totalSpan = g[0] + g[1] + g[2];
       const orientedNotes = h == 'R' ? ns : [...ns].reverse();
       const cands: [number, number, number, number][] = [
         [1, 2, 3, 5],
         [1, 2, 4, 5],
         [1, 3, 4, 5],
-        [1, 2, 3, 4],
-        [2, 3, 4, 5],
       ];
+      if (span <= 9) {
+        cands.push([1, 2, 3, 4]);
+        cands.push([2, 3, 4, 5]);
+      }
 
       const pairCost = (fA: number, fB: number, gap: number) => {
         const ideal: Record<string, [number, number]> = {
@@ -2751,12 +2695,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           '2,3': [1, 4],
           '2,4': [3, 5],
           '3,4': [1, 3],
-          '3,5': [2, 4],
-          '4,5': [1, 2],
+          '3,5': [3, 4],
+          '4,5': [1, 3],
         };
         const [lo, hi] = ideal[`${fA},${fB}`] || [1, 3];
         if (gap < lo) return (lo - gap) * 1.4;
-        if (gap > hi) return (gap - hi) * 1.9;
+        if (gap > hi) return (gap - hi) * 2.1;
         return 0;
       };
 
@@ -2768,20 +2712,18 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           pairCost(cand[0], cand[1], g[0]) +
           pairCost(cand[1], cand[2], g[1]) +
           pairCost(cand[2], cand[3], g[2]);
-
-        if (cand[0] === 2 && cand[3] === 5 && totalSpan > 8)
-          score += (totalSpan - 8) * 1.2;
-        if (cand[0] === 1 && cand[3] === 4 && totalSpan > 10)
-          score += (totalSpan - 10) * 1.0;
-
+        // Slight preference for classic [1, 2, 3, 5] on neutral ties
         if (cand[0] === 1 && cand[1] === 2 && cand[2] === 3 && cand[3] === 5)
-          score -= hasPrev ? 0.05 : 0.15;
-        if (cand[0] > 1) score += hasPrev ? 0.16 : 0.5;
+          score -= 0.12;
+        if (cand[0] > 1) score += 0.35;
+        // Avoid thumb on a black key when adjacent note is white and span fits 2-3-4-5
         if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-          score += 0.65;
+          score += 0.85;
+        // Mildly prefer keeping pinky off a black key if 1-2-3-4 is comfortable
+        if (cand[3] === 5 && BK(orientedNotes[3]) && !BK(orientedNotes[2]))
+          score += 0.35;
 
-        const handF = h == 'L' ? [...cand].reverse() : cand;
-        score += continuityCost(handF, cand);
+        score += vlVoiceCost(cand);
 
         if (score < bestScore) {
           bestScore = score;
@@ -2791,8 +2733,13 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       return h == 'L' ? [...bestF].reverse() : bestF;
     }
 
-    const f = R(1, Math.min(5, n));
-    while (f.length < n) f.push(5);
+    const f: number[] = [];
+    if (n == 5) {
+      f.push(1, 2, 3, 4, 5);
+    } else {
+      while (f.length < n - 4) f.push(1);
+      f.push(2, 3, 4, 5);
+    }
     return h == 'L' ? [...f].reverse() : f;
   }
 
@@ -2800,12 +2747,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     st: number[][],
     hd: string[][],
     prevHandState?: {L?: {ns: number[]; f: (number | string)[]}; R?: {ns: number[]; f: (number | string)[]}},
+    chordBassMode = false,
   ) {
     const F: (number | string)[][] = st.map(s => s.map(() => ''));
     ['L', 'R'].forEach(h => {
       let run: [number, number][] = [];
       let prevChord = prevHandState?.[h as 'L' | 'R'] || null;
       const flush = () => {
+        if (!run.length) return;
         const f = runDP(
           run.map(r => st[r[0]][r[1]]),
           h,
@@ -2817,8 +2766,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         const ix = s.map((_m, j) => j).filter(j => hd[i][j] == h);
         if (!ix.length) return;
         if (ix.length == 1) {
-          run.push([i, ix[0]]);
-          prevChord = {ns: [s[ix[0]]], f: [h == 'L' ? 5 : 1]};
+          const m = s[ix[0]];
+          if (chordBassMode) {
+            flush();
+            const fVal = bassNoteF(m, h, prevChord);
+            F[i][ix[0]] = fVal;
+            prevChord = {ns: [m], f: [fVal]};
+          } else {
+            run.push([i, ix[0]]);
+            prevChord = {ns: [m], f: [h == 'L' ? 5 : 1]};
+          }
         } else {
           flush();
           const curNs = ix.map(j => s[j]);
@@ -2901,7 +2858,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           ),
       ];
     }
-    return [st, hd, fingers(st, hd, prevHandState)];
+    const chordBassMode =
+      !q.pat && q.g != 'scale' && q.g != 'mel' && q.g != 'int';
+    return [st, hd, fingers(st, hd, prevHandState, chordBassMode)];
   }
 
   /* =====================================================================
@@ -4574,14 +4533,17 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         const hasPrev = !!(S.prevRh?.length || S.prevLh?.length);
         const startFreeAnyOct = useSmoothChord && !tolExact && !S.relLocked;
 
-        // When Unlocked, follow minimal voice-leading movement without artificial range jumps;
-        // only nudge back inside playable keyboard bounds if approaching the physical edges.
+        // When Unlocked, periodically allow the system to shift range so the player adjusts
         let rhShiftOffset = 0;
         if (useSmoothChord && hasPrev && !S.rangeLocked && S.prevRh?.length) {
-          const loNote = S.prevRh[0];
-          const hiNote = S.prevRh[S.prevRh.length - 1];
-          if (loNote <= S.lo + 2) rhShiftOffset = 4;
-          else if (hiNote >= S.hi - 2) rhShiftOffset = -4;
+          const prevAvg =
+            S.prevRh.reduce((a: number, b: number) => a + b, 0) /
+            S.prevRh.length;
+          if (prevAvg < 56) rhShiftOffset = 5;
+          else if (prevAvg > 78) rhShiftOffset = -5;
+          else if (S.n > 0 && S.n % 5 === 0) {
+            rhShiftOffset = prevAvg >= 68 ? -6 : 6;
+          }
         }
 
         if (useSmoothChord && hasPrev) {
@@ -4593,13 +4555,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
         const isFixedShapeVoicing = c.v == 'open' || c.v == 'quartal';
         const isDrop2Voicing = c.v == 'drop2';
-        const primDegIdx = C.sc.length == 7 ? S.primDeg % 7 : 0;
-        const primPc = (C.r + (C.sc[primDegIdx] ?? 0)) % 12;
-        const isPrimDegChord =
-          useSmoothChord &&
-          !isFixedShapeVoicing &&
-          c.pc === primPc &&
-          (c.d == null || c.d === primDegIdx);
         const lockRhZone =
           useSmoothChord && S.rangeLocked ? S.lockZoneRh : null;
         const lockLhZone =
@@ -4607,12 +4562,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         const voiced = voice(
           c.ints,
           c.pc,
-          isFixedShapeVoicing || isPrimDegChord || (useSmoothChord && !hasPrev)
-            ? 0
-            : inv,
-          isFixedShapeVoicing || isPrimDegChord || (useSmoothChord && !hasPrev)
-            ? 0
-            : lhInv,
+          isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : inv,
+          isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : lhInv,
           undefined,
           useSmoothChord ? S.prevRh : null,
           useSmoothChord,
@@ -4620,7 +4571,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           useSmoothChord,
           useSmoothChord ? S.homeRhAvg : null,
           useSmoothChord ? S.homeLhAvg : null,
-          isFixedShapeVoicing || isPrimDegChord ? 0 : undefined,
+          isFixedShapeVoicing ? 0 : undefined,
           isDrop2Voicing ? c.base : undefined,
           lockRhZone,
           lockLhZone,
@@ -4642,7 +4593,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         actualInv = isFixedShapeVoicing ? 0 : useSmoothChord ? voiced.rhInv : inv;
         actualLhInv = isFixedShapeVoicing ? 0 : useSmoothChord ? voiced.lhInv : lhInv;
 
-        // Notify user only if an unavoidable jump (e.g. keyboard boundary or fixed-shape voicing) moved >= 5 semitones
+        // Notify user if Unlocked system range shifted substantially from previous chord
         if (useSmoothChord && hasPrev && !S.rangeLocked && S.prevRh?.length && voiced.rhLen > 0) {
           const newRh = voiced.notes.slice(voiced.lhLen);
           const prevAvg =
@@ -4650,7 +4601,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             S.prevRh.length;
           const newAvg =
             newRh.reduce((a: number, b: number) => a + b, 0) / newRh.length;
-          if (Math.abs(newAvg - prevAvg) >= 5) {
+          if (Math.abs(newAvg - prevAvg) >= 4) {
             const {tones, dir} = scaleStepsDelta(prevAvg, newAvg);
             showShiftOverlay(tones, dir);
           }
@@ -4717,9 +4668,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           q.sub =
             (q.type ? 'Play the ' + q.type + ' · ' : '') +
             (hasPrev
-              ? isPrimDegChord
-                ? `Primary degree (${IR[S.primDeg]}) · ${invDesc} (${lockStatus})`
-                : `Closest position (${lockStatus})`
+              ? `Closest position (${lockStatus})`
               : startFreeAnyOct
                 ? `Start in any octave · ${invDesc}`
                 : `Primary anchor (${IR[S.primDeg]}) · ${invDesc}`);
@@ -4994,25 +4943,15 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
       let prevRh: number[] | null = null;
       let prevLh: number[] | null = null;
-      let homeRhAvg: number | null = null;
-      let homeLhAvg: number | null = null;
       let activeLockRh: [number, number] | null = null;
       let activeLockLh: [number, number] | null = null;
-      const primDegIdx = C.sc.length == 7 ? S.primDeg % 7 : 0;
-      const primPc = (C.r + (C.sc[primDegIdx] ?? 0)) % 12;
-      const step0IsPrim =
-        P[1].length > 0 &&
-        P[1][0][2] == null &&
-        ((C.r + P[1][0][0]) % 12) === primPc;
-      if (smooth && C.sc.length == 7 && !step0IsPrim) {
-        const hasExt = P[1].some(([, sf]) => /[679]|11|13/.test(sf));
-        const anchorSz = hasExt ? 4 : 3;
+      if (smooth && S.primDeg > 0 && C.sc.length == 7) {
         const anchorChord = buildDiatonicChord(
           C,
-          anchorSz === 4 ? 't4only' : 't3',
+          't4only',
           C.sc,
-          primDegIdx,
-          anchorSz,
+          S.primDeg % 7,
+          4,
           0,
           0,
           0,
@@ -5027,9 +4966,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           true,
           null,
           false,
-          null,
-          null,
-          0,
         );
         prevRh =
           anchorVoiced.rhLen > 0
@@ -5039,10 +4975,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           anchorVoiced.lhLen > 0
             ? anchorVoiced.notes.slice(0, anchorVoiced.lhLen)
             : null;
-        if (prevRh?.length)
-          homeRhAvg = prevRh.reduce((a, b) => a + b, 0) / prevRh.length;
-        if (prevLh?.length)
-          homeLhAvg = prevLh.reduce((a, b) => a + b, 0) / prevLh.length;
         if (S.rangeLocked) {
           activeLockRh = prevRh?.length ? computeLockCorridor(prevRh) : null;
           activeLockLh = prevLh?.length ? computeLockCorridor(prevLh) : null;
@@ -5053,10 +4985,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       q.ch = P[1].map(([o, sf, bassO], stepIdx) => {
         const x = Q.find(y => y[0] === sf)!;
         const pc = (C.r + o) % 12;
-        const isPrimStep = smooth && bassO == null && pc === primPc;
         const mx = Math.min(mi, x[1].length - 1);
         const inv =
-          isPrimStep || (smooth && stepIdx === 0 && !prevRh)
+          smooth && stepIdx === 0 && !prevRh
             ? 0
             : $('exinv').checked
               ? mx
@@ -5069,32 +5000,26 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           x[1],
           pc,
           inv,
-          isPrimStep ? 0 : lhi,
+          lhi,
           forceBass,
           prevRh,
           smooth && bassO == null,
           prevLh,
           smooth,
-          homeRhAvg,
-          homeLhAvg,
-          isPrimStep ? 0 : undefined,
+          null,
+          null,
+          undefined,
           undefined,
           (stepIdx > 0 || prevRh != null) && S.rangeLocked ? activeLockRh : null,
           (stepIdx > 0 || prevLh != null) && S.rangeLocked ? activeLockLh : null,
         );
         if (voiced.rhLen > 0) prevRh = voiced.notes.slice(voiced.lhLen);
         if (voiced.lhLen > 0) prevLh = voiced.notes.slice(0, voiced.lhLen);
-        if (stepIdx === 0 && smooth && !activeLockRh) {
-          if (homeRhAvg == null && prevRh?.length)
-            homeRhAvg = prevRh.reduce((a, b) => a + b, 0) / prevRh.length;
-          if (homeLhAvg == null && prevLh?.length)
-            homeLhAvg = prevLh.reduce((a, b) => a + b, 0) / prevLh.length;
-          if (S.rangeLocked) {
-            if (prevRh?.length) activeLockRh = computeLockCorridor(prevRh);
-            if (prevLh?.length) activeLockLh = computeLockCorridor(prevLh);
-            S.lockZoneRh = activeLockRh;
-            S.lockZoneLh = activeLockLh;
-          }
+        if (stepIdx === 0 && smooth && S.rangeLocked && !activeLockRh) {
+          if (prevRh?.length) activeLockRh = computeLockCorridor(prevRh);
+          if (prevLh?.length) activeLockLh = computeLockCorridor(prevLh);
+          S.lockZoneRh = activeLockRh;
+          S.lockZoneLh = activeLockLh;
         }
         return {
           name: pn(pc) + sf + slashTxt,
@@ -5102,7 +5027,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           ints: x[1],
           pc,
           forceBass,
-          isPrimDeg: isPrimStep,
           exp: voiced.notes,
           hd: voiced.hd,
           lhLen: voiced.lhLen,
@@ -5719,10 +5643,54 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
     S.fm = {};
     if (showFingNow && fg && fh) {
-      const notesForBadges = q.steps ? q.steps.flat() : staffNotes;
+      let notesForBadges: number[] = q.steps ? q.steps.flat() : staffNotes;
+      let fgForBadges = fg;
+      let fhForBadges = fh;
+      const exactKbCheck =
+        tolExact ||
+        !!q.isRelAnchored ||
+        (q.g == 'prog' && !!q.relProg && !!q.relLocked);
+      if (
+        !isTeach &&
+        d &&
+        q.ok &&
+        !exactKbCheck &&
+        !q.ch &&
+        !q.steps &&
+        q.g != 'scale' &&
+        q.g != 'mel' &&
+        q.played?.length &&
+        q.played.length === q.exp?.length
+      ) {
+        const playedSorted = [...new Set<number>(q.played)].sort((a, b) => a - b);
+        if (playedSorted.length === q.exp.length) {
+          const playedPrevState: {L?: {ns: number[]; f: (number | string)[]}; R?: {ns: number[]; f: (number | string)[]}} = {};
+          if (q.prevLh?.length)
+            playedPrevState.L = {
+              ns: q.prevLh,
+              f: q.prevLhF?.length === q.prevLh.length ? q.prevLhF : chordF(q.prevLh, 'L'),
+            };
+          if (q.prevRh?.length)
+            playedPrevState.R = {
+              ns: q.prevRh,
+              f: q.prevRhF?.length === q.prevRh.length ? q.prevRhF : chordF(q.prevRh, 'R'),
+            };
+          const playedHd =
+            q.hd && q.hd.length === playedSorted.length ? q.hd : fh;
+          const playedF = fingers(
+            [playedSorted],
+            [playedHd],
+            playedPrevState,
+            q.g != 'int',
+          );
+          notesForBadges = playedSorted;
+          fgForBadges = playedF[0];
+          fhForBadges = playedHd;
+        }
+      }
       notesForBadges.forEach((m: number, idx: number) => {
-        const f = fg[idx];
-        const h = fh[idx] || 'R';
+        const f = fgForBadges[idx];
+        const h = fhForBadges[idx] || 'R';
         if (!f) return;
         const arr = S.fm[m] || (S.fm[m] = []);
         if (!arr.some((x: any) => x.f == f && x.h == h)) arr.push({f, h});
@@ -6190,7 +6158,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   function syncRelativeAnchor(q: any, ok: boolean) {
     if (!q || !q.isRelChord || q.relSynced) return;
     const tolExact = $('tol').value == 'exact';
-    if (!tolExact && !S.relLocked && !ok) return;
+    if (!tolExact && !S.relLocked && !ok && S.studyMode != 'teach') return;
     const played = q.played || [];
     const allowPlayedAnchor =
       ok &&
@@ -6212,11 +6180,28 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       }
     }
 
+    const prevLhState =
+      q.prevLh?.length && q.prevLhF?.length === q.prevLh.length
+        ? {ns: q.prevLh, f: q.prevLhF}
+        : q.prevLh?.length
+          ? {ns: q.prevLh, f: chordF(q.prevLh, 'L')}
+          : null;
+    const prevRhState =
+      q.prevRh?.length && q.prevRhF?.length === q.prevRh.length
+        ? {ns: q.prevRh, f: q.prevRhF}
+        : q.prevRh?.length
+          ? {ns: q.prevRh, f: chordF(q.prevRh, 'R')}
+          : null;
+
     S.prevLhF = nextLh?.length
-      ? chordF(nextLh, 'L', q.prevLh || null, q.prevLhF || null)
+      ? nextLh.length === 1
+        ? [bassNoteF(nextLh[0], 'L', prevLhState)]
+        : chordF(nextLh, 'L', q.prevLh || null, q.prevLhF || null)
       : null;
     S.prevRhF = nextRh?.length
-      ? chordF(nextRh, 'R', q.prevRh || null, q.prevRhF || null)
+      ? nextRh.length === 1
+        ? [bassNoteF(nextRh[0], 'R', prevRhState)]
+        : chordF(nextRh, 'R', q.prevRh || null, q.prevRhF || null)
       : null;
     S.prevLh = nextLh;
     S.prevRh = nextRh;
@@ -6411,6 +6396,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               const sortedH = [...h].sort((a, b) => a - b);
               const c0 = q.ch[0];
               c0.exp = sortedH;
+              if (q.pos === 0) q.exp = sortedH;
               let pLh: number[] | null =
                 c0.lhLen > 0 ? sortedH.slice(0, c0.lhLen) : null;
               let pRh: number[] | null =
@@ -6446,7 +6432,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                   true,
                   hRhAvg,
                   hLhAvg,
-                  step.isPrimDeg ? 0 : undefined,
+                  undefined,
                   undefined,
                   lockRh,
                   lockLh,
@@ -6572,7 +6558,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                 true,
                 hRhAvg,
                 hLhAvg,
-                step.isPrimDeg ? 0 : undefined,
+                undefined,
                 undefined,
                 lockRh,
                 lockLh,

@@ -15,7 +15,7 @@ export const PWAInstallButton: React.FC = () => {
       <button
         type="button"
         onClick={install}
-        className="s pwa-install-btn"
+        className="s flex items-center gap-2 !py-1.5 !px-3 !text-sm !rounded-md whitespace-nowrap"
         title="Install Pedagogue for offline use"
       >
         <svg
@@ -41,16 +41,16 @@ export const PWAInstallButton: React.FC = () => {
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="s pwa-install-btn"
+          className="s !py-1.5 !px-3 !text-sm !rounded-md whitespace-nowrap"
         >
           Install offline
         </button>
 
         {showIOSGuide && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-            <div className="w-full max-w-sm rounded-lg border border-[#232327] bg-[#0e0e10] p-6 text-[#f3f1ec]">
-              <h3 className="text-xl font-semibold">Install Pedagogue Offline</h3>
-              <p className="mt-2 text-sm text-[#8e8d87] leading-relaxed">
+            <div className="w-full max-w-sm rounded-lg border border-[#272521] bg-[#10100e] p-6 text-[#f3f1ec]">
+              <h3 className="text-xl font-bold">Install Pedagogue Offline</h3>
+              <p className="mt-2 text-base text-[#98938a]">
                 1. Tap the <strong className="text-[#f3f1ec]">Share</strong>{' '}
                 button in Safari.
                 <br />
@@ -80,7 +80,7 @@ export const OfflineIndicator: React.FC = () => {
   if (isOnline) return null;
 
   return (
-    <div className="offline-banner">
+    <div className="fixed bottom-4 left-4 z-50 rounded-md border border-[#272521] bg-[#10100e] px-3 py-1.5 text-sm text-[#f3f1ec]">
       Offline mode ready
     </div>
   );

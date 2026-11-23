@@ -13,24 +13,22 @@
    1. BASE: variables, reset, layout
    ===================================================================== */
 :root {
-  --bg: #070708;
+  --bg: #070706;
   --fg: #f3f1ec;
-  --mut: #8e8d87;
-  --card: #0e0e10;
-  --bd: #232327;
-  --ac: #e5b85c;
-  --acf: #110f0a;
-  --ok: #2fb36d;
-  --bad: #e05a5a;
-  --font-display: 'Cormorant Garamond', 'Acc', 'Noto Music', Georgia, 'Times New Roman', serif;
-  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mut: #98938a;
+  --card: #10100e;
+  --bd: #272521;
+  --ac: #d4b475;
+  --acf: #100e0a;
+  --ok: #38a86b;
+  --bad: #d95b5b;
   color-scheme: dark;
 }
 
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
-  scrollbar-color: #34343a transparent;
+  scrollbar-color: #3a3a40 transparent;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -43,13 +41,13 @@
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: #34343a;
+  background: #3a3a40;
   border-radius: 99px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #52525a;
+  background: #5a5a62;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-button {
@@ -64,22 +62,24 @@
 :focus-visible {
   outline: 2px solid var(--ac);
   outline-offset: 2px;
-  border-radius: 7px;
+  border-radius: 10px;
 }
 
 ::selection {
-  background: rgba(229, 184, 92, 0.28);
+  background: rgba(212, 180, 117, 0.28);
 }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-ui);
-  font-size: 15px;
-  line-height: 1.45;
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
+  font-family: 'Cormorant Garamond', 'Acc', 'Noto Music', Georgia, 'Times New Roman', serif;
+  font-size: 18px;
+  line-height: 1.4;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  font-variant-numeric: lining-nums;
+  font-feature-settings: 'lnum' 1;
 }
 
 button,
@@ -94,16 +94,15 @@ input {
 .top {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
   max-width: 1500px;
   margin: 0 auto;
-  padding: 10px 18px;
-  border-bottom: 1px solid #18181b;
+  padding: 10px 16px;
   flex: none;
 }
 
-.top .midi-status {
+.top .chip {
   margin-left: auto;
 }
 
@@ -112,18 +111,18 @@ input {
   align-items: center;
   padding: 2px 4px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   background: transparent;
   cursor: pointer;
   flex: none;
-  transition: opacity 0.16s ease;
+  transition: opacity 0.16s ease, transform 0.16s ease;
 }
 .logo-btn:hover {
-  opacity: 0.86;
+  opacity: 0.88;
 }
 
 .logo {
-  height: 34px;
+  height: 38px;
   width: auto;
   display: block;
   flex: none;
@@ -132,72 +131,56 @@ input {
 .mode-nav {
   display: inline-flex;
   align-items: center;
-  gap: 18px;
-  margin-left: 8px;
+  gap: 14px;
+  padding: 0 4px;
   flex: none;
 }
 .mode-nav-btn {
   border: 0;
-  border-bottom: 1.5px solid transparent;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--mut);
-  font-size: 13.5px;
-  font-weight: 500;
-  padding: 6px 2px;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 5px 2px;
   border-radius: 0;
   white-space: nowrap;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: color 0.16s ease, border-color 0.16s ease;
 }
 .mode-nav-btn:hover {
   color: var(--fg);
 }
 .mode-nav-btn.on {
   color: var(--fg);
-  font-weight: 600;
   border-bottom-color: var(--ac);
 }
 
-.cur-open-btn,
-.pwa-install-btn {
+.cur-open-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 11px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: 7px;
+  padding: 5px 11px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: 6px;
   white-space: nowrap;
   flex: none;
 }
-.cur-open-btn:hover,
-.pwa-install-btn:hover {
-  border-color: #46464f;
+.cur-open-btn:hover {
+  border-color: var(--ac);
   color: var(--fg);
 }
 
-.midi-status {
-  font-size: 12.5px;
+.chip {
+  font-size: 13px;
   font-weight: 500;
+  padding: 2px 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
   color: var(--mut);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 280px;
-}
-
-.offline-banner {
-  position: fixed;
-  bottom: 14px;
-  left: 16px;
-  z-index: 50;
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--bd);
-  background: var(--card);
-  color: var(--fg);
-  font-size: 12.5px;
-  font-weight: 500;
 }
 
 .app.app-view-hidden {
@@ -212,18 +195,18 @@ input {
 .ic {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--fg);
   border: 1px solid var(--bd);
   flex: none;
 }
 .ic:hover {
-  background: #151518;
-  border-color: #3a3a42;
+  background: #171614;
+  border-color: #3d3932;
 }
 .ic svg {
   display: block;
@@ -392,36 +375,34 @@ input {
     position: sticky;
     top: 0;
     z-index: 60;
-    background: var(--bg);
+    background: #000;
     padding: 8px 12px;
-    height: 56px;
-    gap: 10px;
+    height: 60px;
+    gap: 8px;
   }
   .logo {
-    height: 28px;
-  }
-  .mode-nav {
-    gap: 10px;
-    margin-left: 2px;
+    height: 30px;
   }
   .mode-nav-btn {
-    padding: 4px 2px;
-    font-size: 12.5px;
+    padding: 4px 8px;
+    font-size: 13px;
   }
-  .cur-open-btn,
-  .pwa-install-btn {
+  .cur-open-btn {
     padding: 5px 9px;
-    font-size: 12px;
+    font-size: 12.5px;
   }
   .cur-open-btn span {
     display: none;
   }
-  .midi-status {
-    margin-left: auto;
+  .chip {
+    margin-left: 0;
     flex: 1 1 0;
     min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 11px;
-    text-align: right;
+    text-align: center;
   }
   .app,
   .app.closed {
@@ -512,7 +493,7 @@ input {
 .card {
   background: var(--card);
   border: 1px solid var(--bd);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 16px;
 }
 
@@ -536,12 +517,12 @@ button {
   font: inherit;
   cursor: pointer;
   border: 0;
-  border-radius: 7px;
-  padding: 8px 16px;
+  border-radius: 6px;
+  padding: 9px 16px;
   background: var(--ac);
   color: var(--acf);
-  font-weight: 600;
-  font-size: 14.5px;
+  font-weight: 700;
+  font-size: 16px;
 }
 button.s {
   background: transparent;
@@ -561,24 +542,26 @@ button,
 .seg button,
 .sw .tr,
 .ic {
-  transition: background-color 0.15s, color 0.15s, border-color 0.15s, opacity 0.15s;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s, transform 0.1s, opacity 0.15s;
+}
+button:not(:disabled):active {
+  transform: scale(0.97);
 }
 button.s:not(:disabled):hover {
-  background: #151518;
-  border-color: #3a3a42;
+  background: #161618;
 }
 
 .bar {
   display: flex;
-  gap: 9px;
+  gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
   flex: 0 0 auto;
   margin: clamp(4px, 1dvh, 10px) 0;
 }
 .bar button {
-  padding: clamp(8px, 1.2dvh, 11px) clamp(15px, 1.5vw, 20px);
-  font-size: clamp(13.5px, 1.9dvh, 15.5px);
+  padding: clamp(8px, 1.3dvh, 12px) clamp(15px, 1.6vw, 22px);
+  font-size: clamp(15px, 2.1dvh, 18px);
   line-height: 1.25;
 }
 .bar .on {
@@ -588,6 +571,7 @@ button.s:not(:disabled):hover {
 #nx.ready {
   border-color: var(--ac);
   color: var(--ac);
+  box-shadow: 0 0 0 1px rgba(212, 180, 117, 0.35);
 }
 
 .prompt-top {
@@ -603,7 +587,7 @@ button.s:not(:disabled):hover {
   grid-column: 2;
   flex: 0 0 auto;
   text-align: center;
-  color: #f2c14e;
+  color: var(--ac);
   font-weight: 600;
   font-size: clamp(14px, 2dvh, 18px);
   letter-spacing: 0.02em;
@@ -628,7 +612,7 @@ button.s:not(:disabled):hover {
   align-items: center;
   gap: 6px;
   padding: 5px 11px;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 13px;
   font-weight: 500;
   color: var(--mut);
@@ -638,12 +622,12 @@ button.s:not(:disabled):hover {
 .adv-btn:not(:disabled):hover,
 .adv-btn[aria-expanded='true'] {
   color: var(--fg);
-  border-color: #3a3a42;
+  border-color: #46423a;
 }
 .adv-btn.manual,
 .time-btn.timed {
   color: var(--ac);
-  border-color: rgba(242, 193, 78, 0.45);
+  border-color: rgba(212, 180, 117, 0.45);
 }
 
 .adv-pop {
@@ -652,8 +636,8 @@ button.s:not(:disabled):hover {
   right: 0;
   width: 264px;
   background: var(--card);
-  border: 1px solid #2e2e36;
-  border-radius: 12px;
+  border: 1px solid #35322c;
+  border-radius: 8px;
   padding: 12px;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72);
   text-align: left;
@@ -678,16 +662,16 @@ button.s:not(:disabled):hover {
   display: grid;
   grid-template-columns: 1fr 1.35fr;
   gap: 4px;
-  background: #0d0d10;
+  background: #0c0c0a;
   border: 1px solid var(--bd);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 3px;
 }
 .adv-seg button {
   padding: 6px 8px;
   font-size: 12px;
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--mut);
 }
@@ -725,15 +709,15 @@ button.s:not(:disabled):hover {
   padding: 5px 6px;
   font-size: 12px;
   font-weight: 600;
-  border-radius: 7px;
-  background: #141418;
+  border-radius: 5px;
+  background: #141311;
   color: var(--fg);
   border: 1px solid var(--bd);
 }
 .adv-presets button.active {
   border-color: var(--ac);
   color: var(--ac);
-  background: rgba(242, 193, 78, 0.1);
+  background: rgba(212, 180, 117, 0.1);
 }
 .adv-custom {
   display: flex;
@@ -773,11 +757,10 @@ button.s:not(:disabled):hover {
 
 #q {
   flex: 0 0 auto;
-  font-family: var(--font-display);
-  font-size: clamp(32px, 5.8dvh, 58px);
-  font-weight: 600;
+  font-size: clamp(28px, 5.2dvh, 54px);
+  font-weight: 700;
   letter-spacing: 0.005em;
-  line-height: 1.1;
+  line-height: 1.15;
   text-align: center;
   margin: 2px 0;
 }
@@ -820,8 +803,8 @@ button.s:not(:disabled):hover {
   flex: 0 0 auto;
   text-align: center;
   color: #cc5260;
-  font-weight: 500;
-  font-size: clamp(14px, 2.1dvh, 18px);
+  font-weight: 600;
+  font-size: clamp(17px, 2.5dvh, 22px);
   line-height: 1.32;
 }
 #fb {
@@ -1047,25 +1030,18 @@ button.s:not(:disabled):hover {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border-radius: 7px;
-  background: rgba(14, 14, 18, 0.94);
-  border: 1px solid rgba(242, 193, 78, 0.55);
-  color: #f2c14e;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--card);
+  border: 1px solid rgba(212, 180, 117, 0.45);
+  color: var(--ac);
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 .kb-cd.urgent .kb-cd-pill {
-  border-color: rgba(224, 85, 101, 0.75);
-  color: #ff7a88;
-}
-.kb-cd-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
+  border-color: rgba(217, 91, 91, 0.75);
+  color: #f39a9a;
 }
 #kb i {
   position: absolute;
@@ -1084,7 +1060,7 @@ button.s:not(:disabled):hover {
   border-radius: 0 0 3px 3px;
 }
 #kb .k-held {
-  background: #6d85d6;
+  background: var(--ac);
 }
 #kb .k-ok {
   background: #2fb36d;
@@ -1117,11 +1093,11 @@ button.s:not(:disabled):hover {
   color: #3d2b00;
 }
 body[data-study='teach'] #kb .k-miss {
-  background: #5c73c7;
+  background: #6e7ef2;
 }
 body[data-study='teach'] #kb b.k-miss {
-  background: #4659a6;
-  border: 1px solid #9eb0f5;
+  background: #5363d6;
+  border: 1px solid #aeb8ff;
 }
 body[data-study='teach'] #kb .k-miss .koct {
   color: #f4f6ff;
@@ -1349,9 +1325,9 @@ body[data-study='teach'] #kb .k-miss .koct {
    5. SETTINGS PANEL & CONTROLS
    ===================================================================== */
 .panel h3 {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--mut);
   margin: 18px 0 8px;
@@ -1370,17 +1346,17 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .f > label {
   display: block;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
   margin-bottom: 5px;
 }
 .f select {
   width: 100%;
   font: inherit;
-  font-size: 14.5px;
-  padding: 8px 10px;
-  border-radius: 7px;
+  font-size: 18px;
+  padding: 10px;
+  border-radius: 10px;
   border: 1px solid var(--bd);
   background: var(--bg);
   color: var(--fg);
@@ -1390,7 +1366,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .why {
   display: none;
-  font-size: 12.5px;
+  font-size: 14px;
   color: var(--mut);
   margin-top: 4px;
 }
@@ -1405,7 +1381,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .seg {
   display: flex;
   border: 1px solid var(--bd);
-  border-radius: 7px;
+  border-radius: 10px;
   overflow: hidden;
 }
 .seg button {
@@ -1413,9 +1389,9 @@ body[data-study='teach'] #kb .k-miss .koct {
   border-radius: 0;
   background: var(--bg);
   color: var(--fg);
-  font-weight: 600;
-  font-size: 13.5px;
-  padding: 8px 6px;
+  font-weight: 700;
+  font-size: 16px;
+  padding: 9px 6px;
   border-right: 1px solid var(--bd);
 }
 .seg button:last-child {
@@ -1430,7 +1406,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 /* toggle switch */
 .f > label.sw {
   display: flex;
-  gap: 11px;
+  gap: 12px;
   align-items: flex-start;
   font-size: inherit;
   font-weight: 500;
@@ -1444,30 +1420,29 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .sw .tr {
   flex: none;
-  width: 36px;
-  height: 21px;
+  width: 40px;
+  height: 24px;
   border-radius: 99px;
-  background: #2f2f35;
+  background: #3a3a40;
   position: relative;
   margin-top: 2px;
 }
 .sw .tr::after {
   content: "";
   position: absolute;
-  top: 2.5px;
-  left: 2.5px;
-  width: 16px;
-  height: 16px;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #f3f1ec;
+  background: #fff;
   transition: 0.15s;
 }
 .sw input:checked + .tr {
   background: var(--ac);
 }
 .sw input:checked + .tr::after {
-  left: 17.5px;
-  background: var(--acf);
+  left: 19px;
 }
 .sw input:focus-visible + .tr {
   outline: 2px solid var(--ac);
@@ -1475,14 +1450,12 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .sw b {
   display: block;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
 }
 .sw small {
   color: var(--mut);
-  font-size: 12.5px;
-  line-height: 1.35;
-  display: block;
+  font-size: 14px;
 }
 .f.off .sw {
   cursor: not-allowed;
@@ -1499,13 +1472,13 @@ body[data-study='teach'] #kb .k-miss .koct {
   align-items: center;
   gap: 8px;
   text-align: left;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--bd);
-  border-radius: 7px;
+  border-radius: 10px;
   background: var(--bg);
   color: var(--fg);
   font-weight: 500;
-  font-size: 14.5px;
+  font-size: 18px;
 }
 .ddb span:last-child {
   color: var(--mut);
@@ -1524,18 +1497,18 @@ body[data-study='teach'] #kb .k-miss .koct {
   overflow: auto;
   background: var(--card);
   border: 1px solid var(--bd);
-  border-radius: 8px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-  padding: 5px;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+  padding: 6px;
 }
 .ddl[hidden] {
   display: none;
 }
 .ddo {
-  padding: 7px 9px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 18px;
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -1550,8 +1523,8 @@ body[data-study='teach'] #kb .k-miss .koct {
   font-weight: 600;
 }
 .ddc {
-  opacity: 0.65;
-  font-size: 12px;
+  opacity: 0.6;
+  font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -1562,24 +1535,8 @@ body[data-study='teach'] #kb .k-miss .koct {
   text-transform: uppercase;
   color: var(--mut);
   padding: 10px 10px 4px;
-}
-.ddh::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 7px;
-  background: var(--lc, var(--mut));
-}
-.ddh[data-l='B'] {
-  --lc: #2fa36b;
-}
-.ddh[data-l='I'] {
-  --lc: #e0a526;
-}
-.ddh[data-l='A'] {
-  --lc: #d65a7a;
+  border-bottom: 1px solid var(--bd);
+  margin-bottom: 4px;
 }
 
 /* =====================================================================
@@ -1596,24 +1553,23 @@ body[data-study='teach'] #kb .k-miss .koct {
   border: 0;
 }
 #ib h4 {
-  font-family: var(--font-display);
   font-size: 28px;
   margin: 12px 0 4px;
-  font-weight: 600;
+  font-weight: 700;
 }
 .ip {
   color: var(--mut);
-  font-size: 14.5px;
-  line-height: 1.5;
+  font-size: 17px;
+  line-height: 1.45;
   margin: 6px 0 12px;
 }
 .ir {
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  padding: 8px 0;
+  padding: 9px 0;
   border-bottom: 1px solid var(--bd);
-  font-size: 14px;
+  font-size: 17px;
 }
 .ir span {
   color: var(--mut);
@@ -1625,13 +1581,12 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .nt {
   display: inline-block;
-  padding: 1px 7px;
+  padding: 1px 8px;
   margin: 2px 0 2px 4px;
   border-radius: 4px;
-  background: #17171a;
   border: 1px solid var(--bd);
-  font-weight: 600;
-  font-size: 13px;
+  background: #151412;
+  font-weight: 700;
 }
 
 /* =====================================================================
@@ -1678,15 +1633,14 @@ body[data-study='teach'] #kb .k-miss .koct {
   flex: none;
 }
 .cur-head h2 {
-  font-family: var(--font-display);
   margin: 0;
-  font-size: 26px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
   line-height: 1.15;
 }
 .cur-sub {
   margin: 2px 0 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mut);
 }
 
@@ -1700,13 +1654,13 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .cur-tab {
   padding: 6px 12px;
-  font-size: 13.5px;
-  border-radius: 6px;
+  font-size: 14px;
+  border-radius: 8px;
 }
 .cur-tab.on {
   border-color: var(--ac);
   color: var(--ac);
-  background: rgba(229, 184, 92, 0.1);
+  background: rgba(212, 180, 117, 0.12);
 }
 
 .cur-body {
@@ -1729,7 +1683,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .cur-box {
   background: var(--bg);
   border: 1px solid var(--bd);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 14px;
 }
 .cur-box h3 {
@@ -1773,13 +1727,13 @@ body[data-study='teach'] #kb .k-miss .koct {
 .cur-callout {
   margin-top: 12px;
   padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(229, 184, 92, 0.35);
-  background: rgba(229, 184, 92, 0.07);
+  border-radius: 6px;
+  border: 1px solid rgba(212, 180, 117, 0.35);
+  background: rgba(212, 180, 117, 0.07);
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .cur-launch {
@@ -1802,18 +1756,18 @@ body[data-study='teach'] #kb .k-miss .koct {
 
 .cur-timer-box {
   padding: 12px;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--card);
   border: 1px solid var(--bd);
   text-align: center;
   margin-bottom: 12px;
 }
 .cur-timer-block {
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--mut);
 }
 .cur-timer-clock {
-  font-size: 36px;
+  font-size: 38px;
   font-weight: 700;
   line-height: 1.1;
   margin: 6px 0 10px;
@@ -1830,13 +1784,13 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 .cur-pill {
   padding: 5px 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   border-radius: 6px;
 }
 .cur-pill.on {
   border-color: var(--ac);
   color: var(--ac);
-  background: rgba(229, 184, 92, 0.12);
+  background: rgba(212, 180, 117, 0.14);
 }
 
 .cur-log-form {
@@ -1851,12 +1805,12 @@ body[data-study='teach'] #kb .k-miss .koct {
   border-radius: 6px;
   color: var(--fg);
   padding: 6px 9px;
-  font-size: 13.5px;
+  font-size: 14px;
   min-width: 0;
 }
 .cur-log-form button {
   padding: 6px 12px;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .cur-logs {
   display: flex;
@@ -1866,7 +1820,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .cur-log-item {
   font-size: 13px;
   color: var(--mut);
-  padding: 6px 9px;
+  padding: 5px 8px;
   border-radius: 6px;
   background: var(--card);
 }
@@ -1900,7 +1854,9 @@ body[data-study='teach'] #kb .k-miss .koct {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ac);
-  padding: 2px 0;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
 }
 
 .cur-task-row {
@@ -1915,7 +1871,7 @@ body[data-study='teach'] #kb .k-miss .koct {
   font-size: 14px;
   color: var(--mut);
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--card);
 }
 
@@ -1941,7 +1897,7 @@ body[data-study='teach'] #kb .k-miss .koct {
   color: var(--mut);
 }
 .cur-table td.done {
-  background: rgba(47, 179, 109, 0.08);
+  background: rgba(56, 168, 107, 0.08);
 }
 
 .cur-cell {
@@ -1952,7 +1908,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .cur-cell-chk,
 .cur-cell-play {
   padding: 3px 5px;
-  border-radius: 6px;
+  border-radius: 5px;
   display: inline-grid;
   place-items: center;
   flex: none;
@@ -1995,7 +1951,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .cur-star {
   padding: 4px 10px;
   font-size: 14px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 .cur-star.on {
   background: var(--ac);
@@ -2033,14 +1989,14 @@ body[data-study='teach'] #kb .k-miss .koct {
   align-items: center;
   gap: 5px;
   padding: 5px 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   border-radius: 6px;
   white-space: nowrap;
 }
 .cur-demo-btn.on {
   border-color: var(--ac);
   color: var(--ac);
-  background: rgba(229, 184, 92, 0.12);
+  background: rgba(212, 180, 117, 0.14);
 }
 
 .cur-pathway-btns {
@@ -2053,7 +2009,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .cur-cell-play.on {
   border-color: var(--ac);
   color: var(--ac);
-  background: rgba(229, 184, 92, 0.14);
+  background: rgba(212, 180, 117, 0.16);
 }
 
 @media (max-width: 640px) {
@@ -2071,9 +2027,9 @@ body[data-study='teach'] #kb .k-miss .koct {
 .stat-reset {
   margin-left: 4px;
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: 4px;
   border: 1px solid var(--bd);
-  background: #141418;
+  background: transparent;
   color: var(--mut);
   font-size: 11px;
   font-weight: 600;
@@ -2084,9 +2040,9 @@ body[data-study='teach'] #kb .k-miss .koct {
   transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
 }
 .stat-reset:hover {
-  border-color: rgba(224, 90, 90, 0.55);
+  border-color: rgba(217, 91, 91, 0.55);
   color: #f3a1a1;
-  background: rgba(224, 90, 90, 0.1);
+  background: rgba(217, 91, 91, 0.1);
 }
 
 .confirm-overlay {
@@ -2094,7 +2050,6 @@ body[data-study='teach'] #kb .k-miss .koct {
   inset: 0;
   z-index: 120;
   background: rgba(0, 0, 0, 0.78);
-  backdrop-filter: blur(5px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2102,30 +2057,19 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 
 .confirm-dialog {
-  width: min(440px, 100%);
-  padding: 22px;
+  width: min(420px, 100%);
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.85);
+  gap: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.8);
 }
 
 .confirm-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-}
-
-.confirm-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: rgba(224, 90, 90, 0.14);
-  color: var(--bad);
-  border: 1px solid rgba(224, 90, 90, 0.35);
-  flex: none;
 }
 
 .confirm-head h2 {
@@ -2144,7 +2088,7 @@ body[data-study='teach'] #kb .k-miss .koct {
 .confirm-body {
   margin: 0;
   font-size: 16px;
-  color: #d6d6de;
+  color: #d6d3cb;
   line-height: 1.48;
 }
 
@@ -2160,22 +2104,22 @@ body[data-study='teach'] #kb .k-miss .koct {
   padding: 8px 16px;
   font-size: 15px;
   font-weight: 600;
-  border-radius: 10px;
+  border-radius: 6px;
   white-space: nowrap;
 }
 
 .confirm-danger {
-  background: rgba(224, 90, 90, 0.2);
+  background: rgba(217, 91, 91, 0.2);
   color: #ffd5d5;
-  border: 1px solid rgba(224, 90, 90, 0.55);
+  border: 1px solid rgba(217, 91, 91, 0.55);
 }
 .confirm-danger:hover {
-  background: rgba(224, 90, 90, 0.32);
+  background: rgba(217, 91, 91, 0.32);
   border-color: var(--bad);
 }
 
 /* =====================================================================
-   9. OPENING LOGO ANIMATION (FAVICON TO CENTER-OUTWARD LOGO)
+   9. OPENING LOGO ANIMATION (SPLASH INTRO)
    ===================================================================== */
 .splash-intro {
   position: fixed;
@@ -2188,76 +2132,36 @@ body[data-study='teach'] #kb .k-miss .koct {
   padding: 24px;
   cursor: pointer;
   opacity: 1;
-  transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.42s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .splash-intro.is-exiting {
   opacity: 0;
+  transform: scale(1.01);
   pointer-events: none;
 }
 
-.splash-stage {
+.splash-center {
   position: relative;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-width: 84px;
-  min-height: 84px;
+  text-align: center;
 }
 
-.splash-favicon-shell {
-  position: absolute;
-  width: 84px;
-  height: 84px;
-  border-radius: 17px;
-  background: #0c0c0d;
-  border: 1.5px solid #2a2a30;
-  pointer-events: none;
-  opacity: 0;
-  transform: scale(0.9);
-  animation: splashFavBox 1.05s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+.splash-logo-frame {
+  overflow: hidden;
+  padding: 6px 12px;
 }
 
-.splash-lockup {
-  position: relative;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #f5f5f3;
-}
-
-.splash-brace {
-  height: clamp(46px, 8vw, 68px);
+.splash-logo {
+  height: clamp(60px, 11vw, 96px);
   width: auto;
-  flex: none;
+  display: block;
   opacity: 0;
-  animation: splashBraceIn 0.34s cubic-bezier(0.16, 1, 0.3, 1) 0.05s forwards;
-}
-
-.splash-word {
-  display: inline-flex;
-  align-items: baseline;
-  justify-content: center;
-  overflow-x: clip;
-  overflow-y: visible;
-  max-width: 0;
-  padding: 0.12em 0;
-  font-family: var(--font-display);
-  font-size: clamp(40px, 7.2vw, 60px);
-  font-weight: 400;
-  line-height: 1.35;
-  letter-spacing: 0.005em;
-  white-space: nowrap;
-  animation: splashWordExpand 0.92s cubic-bezier(0.22, 1, 0.36, 1) 0.38s forwards;
-}
-
-.splash-ch {
-  display: inline-block;
-  opacity: 0;
-  transform: scale(0.76);
-  transform-origin: center 58%;
-  animation: splashLetterOut 0.46s cubic-bezier(0.16, 1, 0.3, 1)
-    calc(0.42s + var(--d) * 0.095s) forwards;
+  transform: translateY(10px) scale(0.94);
+  animation: splashLogoReveal 0.85s cubic-bezier(0.16, 1, 0.3, 1) 0.08s forwards;
 }
 
 .splash-skip {
@@ -2269,98 +2173,48 @@ body[data-study='teach'] #kb .k-miss .koct {
   color: var(--mut);
   padding: 6px 14px;
   border-radius: 6px;
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   opacity: 0;
-  animation: splashSkipIn 0.4s ease 0.55s forwards;
+  animation: splashFadeIn 0.45s ease 0.4s forwards;
 }
 .splash-skip:hover {
   color: var(--fg);
-  border-color: #464652;
+  border-color: #46423a;
 }
 
-@keyframes splashFavBox {
+@keyframes splashLogoReveal {
   0% {
     opacity: 0;
-    transform: scale(0.9);
-  }
-  22% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  44% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: scaleX(2.4) scaleY(1.04);
-  }
-}
-
-@keyframes splashBraceIn {
-  0% {
-    opacity: 0;
-    transform: scale(0.88);
+    transform: translateY(10px) scale(0.94);
   }
   100% {
     opacity: 1;
-    transform: scale(1);
+    transform: translateY(0) scale(1);
   }
 }
 
-@keyframes splashWordExpand {
-  0% {
-    max-width: 0;
-    padding: 0.12em 0;
-  }
-  100% {
-    max-width: 460px;
-    padding: 0.12em 0.24em;
-  }
-}
-
-@keyframes splashLetterOut {
-  0% {
-    opacity: 0;
-    transform: scale(0.76);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes splashSkipIn {
-  0% {
+@keyframes splashFadeIn {
+  from {
     opacity: 0;
   }
-  100% {
+  to {
     opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .splash-favicon-shell {
-    display: none;
-  }
-  .splash-brace,
-  .splash-word,
-  .splash-ch,
+  .splash-logo,
   .splash-skip {
     animation: none;
     opacity: 1;
     transform: none;
-    max-width: none;
-  }
-  .splash-word {
-    padding: 0.12em 0.24em;
   }
 }
 
 /* =====================================================================
-   10. HOME CHOOSER (ARCHITECTURAL TWO-COLUMN STUDIO)
+   10. TWO-PANEL HOME CHOOSER (LEARN vs PRACTICE)
    ===================================================================== */
 .home-stage {
   flex: 1 1 0;
@@ -2369,14 +2223,14 @@ body[data-study='teach'] #kb .k-miss .koct {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(20px, 4dvh, 44px) 20px;
+  padding: clamp(16px, 3dvh, 32px) 16px;
 }
 
 .home-inner {
-  width: min(860px, 100%);
+  width: min(720px, 100%);
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 16px;
   animation: homeFadeUp 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -2392,91 +2246,87 @@ body[data-study='teach'] #kb .k-miss .koct {
 }
 
 .home-intro {
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--bd);
+  text-align: center;
+  max-width: 480px;
+  margin: 0 auto;
 }
 
 .home-title {
-  font-family: var(--font-display);
   margin: 0;
-  font-size: clamp(32px, 4.2vw, 44px);
+  font-size: clamp(24px, 3vw, 30px);
   font-weight: 600;
-  line-height: 1.08;
-  letter-spacing: -0.01em;
+  line-height: 1.15;
+  color: var(--fg);
   text-wrap: balance;
 }
 
-.home-columns {
+.home-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0;
+  gap: 16px;
   align-items: stretch;
 }
 
-.home-col {
+.home-card {
   display: flex;
   flex-direction: column;
-  padding: 6px 32px 6px 0;
+  padding: 20px 22px;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--card);
+  transition: border-color 0.16s ease;
 }
-.home-col + .home-col {
-  padding: 6px 0 6px 32px;
-  border-left: 1px solid var(--bd);
-}
-
-.home-col-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 10px;
+.home-card:hover {
+  border-color: #46423a;
 }
 
-.home-col-num {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--mut);
-  font-variant-numeric: tabular-nums;
-}
-
-.home-col-h2 {
-  font-family: var(--font-display);
+.home-card-h2 {
   margin: 0;
-  font-size: 30px;
-  font-weight: 600;
+  font-size: 26px;
+  font-weight: 700;
   line-height: 1.1;
+  color: var(--fg);
 }
 
-.home-col-desc {
-  margin: 0 0 24px;
-  font-size: 14.5px;
-  color: #b8b7b0;
-  line-height: 1.55;
+.home-card-desc {
+  margin: 8px 0 10px;
+  font-size: 16px;
+  color: #cfcbc2;
+  line-height: 1.42;
   flex: 1 1 auto;
 }
 
-.home-col-foot {
+.home-card-tags {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  color: var(--mut);
+  line-height: 1.35;
+}
+
+.home-card-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bd);
 }
 
-.home-col-meta {
-  font-size: 12.5px;
+.home-card-meta {
+  font-size: 13px;
   color: var(--mut);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
-.home-cta,
-.home-cta-secondary {
+.home-cta {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 9px 16px;
-  min-height: 40px;
-  border-radius: 7px;
-  font-size: 13.5px;
-  font-weight: 600;
+  justify-content: center;
+  padding: 7px 14px;
+  min-height: 38px;
+  border-radius: 6px;
+  font-size: 14.5px;
+  font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -2485,16 +2335,8 @@ body[data-study='teach'] #kb .k-miss .koct {
   .home-stage {
     align-items: flex-start;
   }
-  .home-columns {
+  .home-cards {
     grid-template-columns: 1fr;
-  }
-  .home-col {
-    padding: 4px 0 24px;
-  }
-  .home-col + .home-col {
-    padding: 24px 0 4px;
-    border-left: 0;
-    border-top: 1px solid var(--bd);
   }
 }
 
@@ -2511,10 +2353,10 @@ body[data-study='teach'] #timewrap {
   justify-content: center;
   flex-wrap: wrap;
   gap: 8px 14px;
-  padding: 6px 12px;
-  border-radius: 7px;
+  padding: 6px 10px;
+  border-radius: 6px;
   border: 1px solid var(--bd);
-  background: var(--bg);
+  background: #0c0c0a;
   align-self: center;
 }
 .vl-bar[hidden] {
@@ -2530,7 +2372,7 @@ body[data-study='teach'] #timewrap {
 }
 
 .vl-label {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--mut);
   white-space: nowrap;
@@ -2546,16 +2388,16 @@ body[data-study='teach'] #timewrap {
   padding: 3px 8px;
   min-width: 28px;
   min-height: 28px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   border-radius: 5px;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums;
 }
 .vl-deg-btn.on {
   border-color: var(--ac);
-  color: var(--ac);
-  background: rgba(229, 184, 92, 0.14);
+  color: var(--fg);
+  background: rgba(212, 180, 117, 0.2);
 }
 
 .vl-lock-btn {
@@ -2564,15 +2406,15 @@ body[data-study='teach'] #timewrap {
   gap: 6px;
   padding: 4px 11px;
   min-height: 28px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   border-radius: 5px;
   white-space: nowrap;
 }
 .vl-lock-btn.on {
-  border-color: rgba(47, 179, 109, 0.6);
-  color: #b7f5d0;
-  background: rgba(47, 179, 109, 0.12);
+  border-color: rgba(56, 168, 107, 0.65);
+  color: #bdebd0;
+  background: rgba(56, 168, 107, 0.14);
 }
 
 .shift-overlay {
@@ -2593,18 +2435,17 @@ body[data-study='teach'] #timewrap {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 22px 36px;
+  padding: 22px 38px;
   border-radius: 10px;
-  border: 1px solid rgba(229, 184, 92, 0.45);
-  background: rgba(12, 12, 14, 0.94);
-  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.78);
+  border: 1px solid rgba(212, 180, 117, 0.55);
+  background: rgba(16, 16, 14, 0.94);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.8);
   animation: shiftPopFade 1.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .shift-num {
-  font-family: var(--font-display);
-  font-size: clamp(64px, 11vw, 110px);
-  font-weight: 600;
+  font-size: clamp(64px, 11vw, 116px);
+  font-weight: 700;
   line-height: 1;
   color: var(--ac);
   letter-spacing: -0.02em;
@@ -2612,7 +2453,7 @@ body[data-study='teach'] #timewrap {
 }
 
 .shift-label {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--fg);
   letter-spacing: 0.02em;
@@ -2621,7 +2462,7 @@ body[data-study='teach'] #timewrap {
 @keyframes shiftPopFade {
   0% {
     opacity: 0;
-    transform: scale(0.92);
+    transform: scale(0.9);
   }
   12% {
     opacity: 1;
@@ -2638,27 +2479,27 @@ body[data-study='teach'] #timewrap {
 }
 
 .teach-step-btn {
-  padding: 5px 10px;
-  font-size: 13px;
+  padding: 5px 11px;
+  font-size: 14px;
   border-radius: 6px;
   white-space: nowrap;
 }
 .teach-step-btn.on {
   border-color: var(--ac);
-  color: var(--ac);
-  background: rgba(229, 184, 92, 0.14);
+  color: var(--fg);
+  background: rgba(212, 180, 117, 0.16);
 }
 
 .teach-step-play {
-  padding: 5px 11px;
-  font-size: 13px;
+  padding: 5px 12px;
+  font-size: 14px;
   border-radius: 6px;
   white-space: nowrap;
-  border-color: rgba(229, 184, 92, 0.45);
+  border-color: rgba(212, 180, 117, 0.45);
   color: var(--ac);
 }
 .teach-step-play:hover {
-  background: rgba(229, 184, 92, 0.12);
+  background: rgba(212, 180, 117, 0.14);
 }
 
 .teach-guide-sep {
