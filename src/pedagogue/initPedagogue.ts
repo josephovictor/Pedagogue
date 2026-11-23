@@ -4200,8 +4200,13 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
   function openInfo() {
     if (S.ok || S.studyMode == 'teach') {
+      const wasOpen = $('app').classList.contains('io');
       $('app').classList.add('io');
       fillInfo();
+      if (wasOpen) {
+        const ip = $('ip') as HTMLElement | null;
+        ip?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      }
     }
   }
 
@@ -4213,15 +4218,13 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       (isTeach ? true : q.g == 'ear' ? shown : nameOk);
     const el = $('q');
     S.ok = ok;
-    el.classList.toggle('clk', ok && !isTeach);
+    el.classList.toggle('clk', ok);
 
-    if (ok && !isTeach)
+    if (ok)
       el.insertAdjacentHTML(
         'beforeend',
-        '<svg class=iq viewBox="0 0 20 20" width=18 height=18 fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><circle cx=10 cy=10 r=8.2 /><line x1=10 y1=9 x2=10 y2=14 /><circle cx=10 cy=6.3 r=.5 /></svg>',
+        '<svg class=iq viewBox="0 0 20 20" width=18 height=18 fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round aria-hidden="true"><circle cx=10 cy=10 r=8.2 /><line x1=10 y1=9 x2=10 y2=14 /><circle cx=10 cy=6.3 r=.5 /></svg>',
       );
-
-    if (isTeach && !isCompactLandscape()) $('app').classList.add('io');
 
     if ($('app').classList.contains('io')) {
       if (ok) fillInfo();
@@ -7161,7 +7164,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   $('q').onclick = $('stf').onclick = openInfo;
   if ($('ix')) {
     $('ix').onclick = () => {
-      if (S.studyMode == 'teach' && !isCompactLandscape()) return;
       $('app').classList.remove('io');
     };
   }
