@@ -444,9 +444,148 @@ export default function App() {
               >
                 Range: Unlocked
               </button>
+              <div
+                className="vl-group"
+                id="vldirgroup"
+                role="group"
+                aria-label="Voice leading direction"
+              >
+                <span className="vl-label">Direction</span>
+                <div className="vl-degs" id="vldir">
+                  <button
+                    type="button"
+                    className="s vl-dir-btn on"
+                    data-vldir="auto"
+                    title="Auto direction: choose smaller total movement"
+                  >
+                    Auto
+                  </button>
+                  <button
+                    type="button"
+                    className="s vl-dir-btn"
+                    data-vldir="up"
+                    title="Move up the scale"
+                  >
+                    ↑ Up
+                  </button>
+                  <button
+                    type="button"
+                    className="s vl-dir-btn"
+                    data-vldir="down"
+                    title="Move down the scale"
+                  >
+                    ↓ Down
+                  </button>
+                </div>
+              </div>
+              <div
+                className="vl-group"
+                id="vl7group"
+                role="group"
+                aria-label="Seventh chord voicing"
+              >
+                <span className="vl-label">7ths</span>
+                <div className="vl-degs" id="vl7">
+                  <button
+                    type="button"
+                    className="s vl-dir-btn on"
+                    data-vl7="full"
+                    title="Full 4-note 7th chord"
+                  >
+                    Full
+                  </button>
+                  <button
+                    type="button"
+                    className="s vl-dir-btn"
+                    data-vl7="omit5"
+                    title="Omit the 5th (3 notes: root, 3rd, 7th)"
+                  >
+                    Omit 5th
+                  </button>
+                  <button
+                    type="button"
+                    className="s vl-dir-btn"
+                    data-vl7="auto"
+                    title="Use full chord unless a finger adjustment is needed, then compare omit-5th for fewer finger changes"
+                  >
+                    Auto
+                  </button>
+                </div>
+              </div>
             </div>
-            <div id="q">Press Start</div>
-            <div id="sub"></div>
+            <div className="vl-bar" id="scbar" hidden>
+              <div
+                className="vl-group"
+                id="scmodegroup"
+                role="group"
+                aria-label="Answer mode"
+              >
+                <span className="vl-label">Answer mode</span>
+                <div className="vl-degs" id="scmode">
+                  <button
+                    type="button"
+                    className="s vl-dir-btn on"
+                    data-scmode="play"
+                    title="Play the matching answer directly on MIDI or keyboard"
+                  >
+                    Play on keyboard
+                  </button>
+                  <button
+                    type="button"
+                    className="s vl-dir-btn"
+                    data-scmode="quiz"
+                    title="Choose from multiple-choice options"
+                  >
+                    Multiple choice
+                  </button>
+                </div>
+              </div>
+              <div
+                className="vl-group"
+                id="scdiffgroup"
+                role="group"
+                aria-label="Chord-to-scale difficulty"
+              >
+                <span className="vl-label">Difficulty</span>
+                <div className="vl-degs" id="scdiff">
+                  <button
+                    type="button"
+                    className="s vl-dir-btn on"
+                    data-scdiff="beginner"
+                    title="One primary scale per chord quality (maj7, m7, dom7, m7♭5)"
+                  >
+                    Beginner
+                  </button>
+                  <button
+                    type="button"
+                    className="s vl-dir-btn"
+                    data-scdiff="advanced"
+                    title="Context-dependent scales and multiple valid matches"
+                  >
+                    Advanced
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="q-stage">
+              <div
+                className="q-shift q-shift-left"
+                id="shiftleft"
+                hidden
+                aria-live="polite"
+              />
+              <div className="q-center">
+                <div id="q">Press Start</div>
+                <div id="sub"></div>
+                <div className="vl-meta" id="vlmeta" hidden></div>
+              </div>
+              <div
+                className="q-shift q-shift-right"
+                id="shiftright"
+                hidden
+                aria-live="polite"
+              />
+            </div>
             <div className="stf-stage" id="stfstage">
               <div className="stat-wing stat-left" id="statleft"></div>
               <div id="stf"></div>
@@ -566,18 +705,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      <div
-        id="shift-overlay"
-        className="shift-overlay"
-        hidden
-        aria-live="polite"
-      >
-        <div className="shift-card">
-          <div className="shift-num" id="shiftnum"></div>
-          <div className="shift-label" id="shiftlbl"></div>
-        </div>
-      </div>
 
       <OfflineIndicator />
     </>

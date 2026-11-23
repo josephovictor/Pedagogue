@@ -1,6 +1,30 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import {audioEngine, type MetronomeFeel, type SoundPreset} from './audioEngine';
 import type {DrillPreset} from './curriculumData';
+import {
+  assignWindowFingers,
+  buildScaleDegreeLookup,
+  computeNextVoiceLedChord,
+  resolveWindowFingersStrict,
+  windowForAnchor,
+  type VLDirection,
+  type VLDirectionSetting,
+  type VLInversionKey,
+  type VLSeventhMode,
+  type VLStepOutput,
+} from './voiceLeadingEngine';
+import {
+  CHORD_TO_SCALE_SPECS,
+  MODE_CHARACTER_SPECS,
+  MODE_INTERVALS,
+  SCALE_FAMILIES,
+  chordSuffixFromIntervals,
+  getModeDisplayLabel,
+  getScaleFamilyForMode,
+  harmonizeScaleDegrees,
+  prettyChordSuffix,
+  type HarmonizedDegreeInfo,
+} from './scaleChordTheory';
 
 export interface PracticeScoreSnapshot {
   ok: number;
@@ -65,29 +89,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     'G♭',
   ];
 
-  const MODES: Record<string, number[]> = {
-    Ionian: [0, 2, 4, 5, 7, 9, 11],
-    Dorian: [0, 2, 3, 5, 7, 9, 10],
-    Phrygian: [0, 1, 3, 5, 7, 8, 10],
-    Lydian: [0, 2, 4, 6, 7, 9, 11],
-    Mixolydian: [0, 2, 4, 5, 7, 9, 10],
-    Aeolian: [0, 2, 3, 5, 7, 8, 10],
-    Locrian: [0, 1, 3, 5, 6, 8, 10],
-    'Harmonic minor': [0, 2, 3, 5, 7, 8, 11],
-    'Melodic minor': [0, 2, 3, 5, 7, 9, 11],
-    'Lydian dominant': [0, 2, 4, 6, 7, 9, 10],
-    Altered: [0, 1, 3, 4, 6, 8, 10],
-    'Phrygian dominant': [0, 1, 4, 5, 7, 8, 10],
-    'Dorian ♭2': [0, 1, 3, 5, 7, 9, 10],
-    'Lydian augmented': [0, 2, 4, 6, 8, 9, 11],
-    'Mixolydian ♭6': [0, 2, 4, 5, 7, 8, 10],
-    'Locrian ♮2': [0, 2, 3, 5, 6, 8, 10],
-    'Locrian ♮6': [0, 1, 3, 5, 6, 9, 10],
-    'Ionian ♯5': [0, 2, 4, 5, 8, 9, 11],
-    'Dorian ♯4': [0, 2, 3, 6, 7, 9, 10],
-    'Lydian ♯2': [0, 3, 4, 6, 7, 9, 11],
-    'Super Locrian ♭♭7': [0, 1, 3, 4, 6, 8, 9],
-  };
+  const MODES: Record<string, number[]> = MODE_INTERVALS;
 
   const INT: [string, number][] = [
     ['minor 2nd', 1],
@@ -194,16 +196,20 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       ['adv', 'Advanced (Jazz & Neo Soul)', 'A', 'Progressions'],
     ],
     harm: [
+      ['h_harm3', 'Harmonize a scale (triads)', 'B', 'Scales & Chords'],
       ['c_auth', 'Authentic cadence', 'B', 'Cadences'],
       ['c_plag', 'Plagal cadence (Gospel I–IV–I)', 'B', 'Cadences'],
       ['c_half', 'Half cadence', 'B', 'Cadences'],
+      ['h_close', 'Close-range voice leading (triads)', 'B', 'Voice leading'],
+      ['h_harm7', 'Harmonize a scale (7th chords)', 'I', 'Scales & Chords'],
+      ['h_c2s', 'Match scale to chord', 'I', 'Scales & Chords'],
+      ['h_mchar', 'Mode character chords', 'I', 'Scales & Chords'],
       ['h_sec', 'Secondary dominants', 'I', 'Substitutions'],
       ['h_tri', 'Tritone substitution', 'I', 'Substitutions'],
       ['c_dec', 'Deceptive cadence', 'I', 'Cadences'],
       ['h_bor', 'Modal interchange (borrowed)', 'I', 'Colour'],
       ['h_mii', 'Minor ii–V–i', 'I', 'Minor'],
       ['h_guide', 'Guide-tone targeting (3rds & 7ths)', 'I', 'Voice leading'],
-      ['h_close', 'Close-range voice leading (triads)', 'B', 'Voice leading'],
       ['h_close7', 'Close-range voice leading (7th chords)', 'I', 'Voice leading'],
       ['h_back', 'Backdoor dominant', 'A', 'Substitutions'],
       ['h_dim', 'Diminished passing chords', 'A', 'Substitutions'],
@@ -235,7 +241,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   const GN: Record<string, string> = {
     chord: 'Chords',
     harm: 'Harmony',
-    scale: 'Scales',
+    scale: 'Scale runs',
     int: 'Intervals',
     prog: 'Progressions',
     pat: 'Patterns',
@@ -279,7 +285,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       'Game',
       [
         ['chord', 'Chords'],
-        ['scale', 'Scales'],
+        ['scale', 'Scale runs'],
         ['int', 'Intervals'],
         ['prog', 'Progressions'],
         ['harm', 'Harmony'],
@@ -304,9 +310,24 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     ) +
     fld('key', 'Key', [['rnd', 'Any (Random)'], ...OPT(KEYS)], 'C', ALL) +
     fld(
+      'scale',
+      'Scale',
+      [
+        ...SCALE_FAMILIES.map(f => [f.id, f.label] as [string, string]),
+        ['rnd', 'Any (Random)'],
+      ],
+      'major',
+      ALL,
+    ) +
+    fld(
       'mode',
       'Mode',
-      [['rnd', 'Any (Random)'], ...OPT(Object.keys(MODES))],
+      [
+        ['rnd', 'Any (Random)'],
+        ...SCALE_FAMILIES[0].modes.map(
+          m => [m, getModeDisplayLabel(m)] as [string, string],
+        ),
+      ],
       'Ionian',
       ALL,
     ) +
@@ -551,7 +572,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     ) +
     `<div class=f data-g="${ALL}"><button class=s id=cal type=button>Calibrate: press lowest, then highest key</button><small id=calmsg></small> <b id=rng></b><small class=why></small></div>` +
     `<div hidden>` +
-    `<select id=game>${['chord', 'slash', 'pass', 'scale', 'int', 'prog', 'harm_guide', 'harm_close', 'ear'].map(x => `<option>${x}</option>`).join('')}</select>` +
+    `<select id=game>${['chord', 'slash', 'pass', 'scale', 'int', 'prog', 'harm_guide', 'harm_close', 'harm_scale', 'harm_c2s', 'harm_mchar', 'ear'].map(x => `<option>${x}</option>`).join('')}</select>` +
     `<select id=size>${R(3, 7).map(x => `<option>${x}</option>`).join('')}</select>` +
     `<select id=pool><option>all</option><option>key</option></select>` +
     `<select id=bass><option>any</option><option>chord</option><option>out</option></select>` +
@@ -592,11 +613,21 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     relLocked: false,
     primDeg: 0,
     rangeLocked: false,
+    vlDir: 'up' as VLDirectionSetting,
+    vlDirManual: false,
+    vl7Mode: 'full' as VLSeventhMode,
+    vlAnchorRh: null as number | null,
+    vlAnchorLh: null as number | null,
+    vlPrevDirRh: null as VLDirection | null,
+    vlPrevDirLh: null as VLDirection | null,
     lockZoneRh: null as [number, number] | null,
     lockZoneLh: null as [number, number] | null,
     shiftTm: null as ReturnType<typeof setTimeout> | null,
+    shiftManual: null as {tones: number; dir: 'up' | 'down'} | null,
     homeRhAvg: null as number | null,
     homeLhAvg: null as number | null,
+    scMode: 'play' as 'play' | 'quiz',
+    scDiff: 'beginner' as 'beginner' | 'advanced',
   };
   let C: any;
 
@@ -652,33 +683,88 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     }
   }
 
+  function applyShiftSideBadges(shift: {tones: number; dir: 'up' | 'down'} | null) {
+    const leftEl = $('shiftleft') as HTMLElement | null;
+    const rightEl = $('shiftright') as HTMLElement | null;
+    if (!leftEl || !rightEl) return;
+
+    if (!shift || shift.tones <= 0) {
+      leftEl.hidden = true;
+      leftEl.innerHTML = '';
+      delete leftEl.dataset.shiftKey;
+      rightEl.hidden = true;
+      rightEl.innerHTML = '';
+      delete rightEl.dataset.shiftKey;
+      return;
+    }
+
+    const safeTones = Math.max(1, Math.round(shift.tones));
+    const unit = safeTones === 1 ? 'degree' : 'degrees';
+    const leftChevronSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 4.5 C12.8 8.4 9.8 10.6 7 12 C9.8 13.4 12.8 15.6 15.5 19.5"/></svg>`;
+    const rightChevronSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 4.5 C11.2 8.4 14.2 10.6 17 12 C14.2 13.4 11.2 15.6 8.5 19.5"/></svg>`;
+    if (shift.dir === 'down') {
+      const key = `down:${safeTones}`;
+      rightEl.hidden = true;
+      rightEl.innerHTML = '';
+      delete rightEl.dataset.shiftKey;
+      if (leftEl.dataset.shiftKey !== key || leftEl.hidden) {
+        leftEl.dataset.shiftKey = key;
+        leftEl.title = `Shift range ${safeTones} ${unit} left (down)`;
+        leftEl.setAttribute('aria-label', leftEl.title);
+        leftEl.innerHTML = `<span class="q-shift-arrow" aria-hidden="true">${leftChevronSvg}</span><span class="q-shift-num">${safeTones}</span>`;
+        leftEl.hidden = false;
+      }
+    } else {
+      const key = `up:${safeTones}`;
+      leftEl.hidden = true;
+      leftEl.innerHTML = '';
+      delete leftEl.dataset.shiftKey;
+      if (rightEl.dataset.shiftKey !== key || rightEl.hidden) {
+        rightEl.dataset.shiftKey = key;
+        rightEl.title = `Shift range ${safeTones} ${unit} right (up)`;
+        rightEl.setAttribute('aria-label', rightEl.title);
+        rightEl.innerHTML = `<span class="q-shift-num">${safeTones}</span><span class="q-shift-arrow" aria-hidden="true">${rightChevronSvg}</span>`;
+        rightEl.hidden = false;
+      }
+    }
+  }
+
   function hideShiftOverlay() {
     if (S.shiftTm) {
       clearTimeout(S.shiftTm);
       S.shiftTm = null;
     }
-    const el = $('shift-overlay');
-    if (el) el.hidden = true;
+    S.shiftManual = null;
+    applyShiftSideBadges(null);
   }
 
   function showShiftOverlay(tones: number, dir: 'up' | 'down') {
-    const ov = $('shift-overlay');
-    const numEl = $('shiftnum');
-    const lblEl = $('shiftlbl');
-    if (!ov || !numEl || !lblEl) return;
     if (S.shiftTm) {
       clearTimeout(S.shiftTm);
       S.shiftTm = null;
     }
     const safeTones = Math.max(1, Math.round(tones));
-    numEl.textContent = `${safeTones} ${dir === 'up' ? '↑' : '↓'}`;
-    lblEl.textContent = `Shift range ${safeTones} ${safeTones === 1 ? 'tone' : 'tones'} ${dir}`;
-    ov.hidden = true;
-    void (ov as HTMLElement).offsetWidth;
-    ov.hidden = false;
+    S.shiftManual = {tones: safeTones, dir};
+    applyShiftSideBadges(S.shiftManual);
     S.shiftTm = setTimeout(() => {
-      ov.hidden = true;
+      S.shiftManual = null;
       S.shiftTm = null;
+      const q = S.q;
+      const mInfo = q?.vlInfo;
+      if (
+        q &&
+        mInfo &&
+        !S.rangeLocked &&
+        !$('vlbar')?.hidden &&
+        mInfo.handShift !== 0
+      ) {
+        applyShiftSideBadges({
+          tones: Math.abs(mInfo.handShift),
+          dir: mInfo.handShift > 0 ? 'up' : 'down',
+        });
+      } else {
+        applyShiftSideBadges(null);
+      }
     }, 1800);
   }
 
@@ -689,6 +775,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     S.prevRhF = null;
     S.prevLhF = null;
     S.relLocked = false;
+    S.vlAnchorRh = null;
+    S.vlAnchorLh = null;
+    S.vlPrevDirRh = null;
+    S.vlPrevDirLh = null;
     S.lockZoneRh = null;
     S.lockZoneLh = null;
     S.homeRhAvg = null;
@@ -844,6 +934,19 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (ug == 'harm' && g == 'harm_close') {
       return 42;
     }
+    if (ug == 'harm' && g == 'harm_scale') {
+      return 7;
+    }
+    if (ug == 'harm' && g == 'harm_c2s') {
+      return (
+        CHORD_TO_SCALE_SPECS.filter(s =>
+          S.scDiff === 'beginner' ? s.difficulty === 'beginner' : true,
+        ).length || 1
+      );
+    }
+    if (ug == 'harm' && g == 'harm_mchar') {
+      return MODE_CHARACTER_SPECS.length || 1;
+    }
     if (ug == 'ear') {
       const et = $('eartype').value;
       const st = +$('size').value;
@@ -909,10 +1012,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   function ctx() {
     let k = $('key').value;
     let m = $('mode').value;
+    const scFam = $('scale')?.value || 'major';
+    const famModes =
+      scFam === 'rnd'
+        ? Object.keys(MODES)
+        : SCALE_FAMILIES.find(f => f.id === scFam)?.modes ||
+          Object.keys(MODES).slice(0, 7);
     const P: string[] | null = S.mp
       ? S.mp
       : m == 'rnd'
-        ? Object.keys(MODES).slice(0, 7)
+        ? famModes
         : null;
 
     if (ORD()) {
@@ -977,44 +1086,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   ];
 
   function suf(i: number[]) {
-    const t = i[1],
-      f = i[2],
-      n = i.length;
-    let b: string;
-
-    if (t == 2 || t == 5) {
-      b =
-        (n > 3 ? ({11: 'maj7', 10: '7', 9: '6'} as any)[i[3]] || '' : '') +
-        (t == 2 ? 'sus2' : 'sus4') +
-        (f == 6 ? 'b5' : f == 8 ? '#5' : '');
-    } else if (n < 4) {
-      b =
-        (
-          {
-            '4,7': '',
-            '3,7': 'm',
-            '3,6': 'dim',
-            '4,8': 'aug',
-            '4,6': '(b5)',
-            '3,8': 'm(#5)',
-          } as any
-        )[t + ',' + f] ?? '?';
-    } else {
-      b = SEV[t + ',' + f + ',' + i[3]] || '?';
-    }
-
-    const ex = i.slice(4).map((x, j) => XT[j]?.[x - 12] || '?');
-    const nat = ex.every(e => /^\d+$/.test(e));
-
-    if (
-      ex.length &&
-      nat &&
-      (ex.length == 1 || t == 3 || i[3] == 10) &&
-      /^(maj7|m7|7|mMaj7)$/.test(b)
-    )
-      return b.replace('7', ex.at(-1)!);
-
-    return b + (ex.length ? '(' + ex.join(',') + ')' : '');
+    return chordSuffixFromIntervals(i);
   }
 
   /* =====================================================================
@@ -1119,6 +1191,345 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     }
     const tones = count > 0 ? count : Math.max(1, Math.round((hi - lo) / 2));
     return {tones, dir};
+  }
+
+  const INV_KEY_TO_NUM: Record<VLInversionKey, number> = {
+    root: 0,
+    '1st': 1,
+    '2nd': 2,
+    '3rd': 3,
+    '4th': 4,
+    '5th': 5,
+    '6th': 6,
+  };
+
+  function getScaleIdxMapper(): (midi: number) => number {
+    if (C?.sc?.length === 7) {
+      return (m: number) => {
+        const s = sm(m);
+        return (s.o + 1) * 7 + s.l;
+      };
+    }
+    return buildScaleDegreeLookup(C?.r ?? 0, C?.sc || [0, 2, 4, 5, 7, 9, 11]);
+  }
+
+  function windowMidiCorridor(
+    anchorIdx: number,
+    chordSize: number,
+    bounds: [number, number] = [S.lo, S.hi],
+  ): [number, number] {
+    const scLen = C?.sc?.length || 7;
+    const toIdx = getScaleIdxMapper();
+    const win = windowForAnchor(anchorIdx, chordSize, scLen);
+    let loM = bounds[1];
+    let hiM = bounds[0];
+    for (let m = bounds[0]; m <= bounds[1]; m++) {
+      const idx = toIdx(m);
+      if (idx >= win.winLoIdx && idx <= win.winHiIdx) {
+        if (m < loM) loM = m;
+        if (m > hiM) hiM = m;
+      }
+    }
+    return loM <= hiM ? [loM, hiM] : [S.lo, S.hi];
+  }
+
+  function vlBoundsForHand(
+    hand: 'R' | 'L',
+    cl: string,
+    bh: string,
+  ): [number, number] {
+    if (cl === 'grand' && hand === 'R') {
+      const minR = Math.max(S.lo, Math.min(S.hi - 12, bh === 'bass' ? 48 : 53));
+      return [minR, S.hi];
+    }
+    if (cl === 'grand' && hand === 'L') {
+      const maxL = Math.min(S.hi, Math.max(S.lo + 12, 64));
+      return [S.lo, maxL];
+    }
+    return [S.lo, S.hi];
+  }
+
+  interface EngineVoicedResult {
+    notes: number[];
+    hd: string[];
+    lhLen: number;
+    rhLen: number;
+    lhInv: number;
+    rhInv: number;
+    rhOut: VLStepOutput | null;
+    lhOut: VLStepOutput | null;
+    vlF: number[];
+    rhF: number[];
+    lhF: number[];
+    vlInfo: {
+      direction: VLDirection;
+      inversion: VLInversionKey;
+      inversionLabel: string;
+      handShift: number;
+      shapeChange: boolean;
+      dirFlipped: boolean;
+      adjusted: boolean;
+      omittedFifth: boolean;
+      commonTonesKept: number;
+      notRootPosition?: boolean;
+      warning?: string;
+    };
+  }
+
+  function runEngineVoice(opts: {
+    ints: number[];
+    pc: number;
+    cl: string;
+    bh: string;
+    rangeMode: 'locked' | 'unlocked';
+    direction: VLDirectionSetting;
+    seventhMode?: VLSeventhMode;
+    prevRh?: number[] | null;
+    prevRhF?: number[] | null;
+    prevAnchorRh?: number | null;
+    prevDirRh?: VLDirection | null;
+    prevLh?: number[] | null;
+    prevLhF?: number[] | null;
+    prevAnchorLh?: number | null;
+    prevDirLh?: VLDirection | null;
+    drop2Base?: number[];
+    fixedInv?: number;
+    forceBass?: number;
+    isSlash?: boolean;
+    slashName?: string;
+  }): EngineVoicedResult {
+    const {
+      ints,
+      pc,
+      cl,
+      bh,
+      rangeMode,
+      direction,
+      seventhMode = S.vl7Mode,
+      prevRh,
+      prevRhF,
+      prevAnchorRh,
+      prevDirRh,
+      prevLh,
+      prevLhF,
+      prevAnchorLh,
+      prevDirLh,
+      drop2Base,
+      fixedInv,
+      forceBass,
+      isSlash,
+      slashName,
+    } = opts;
+    const scRoot = C?.r ?? 0;
+    const scInts = C?.sc || [0, 2, 4, 5, 7, 9, 11];
+    const toScaleIdx = getScaleIdxMapper();
+
+    if (cl === 'bass') {
+      const lhOut = computeNextVoiceLedChord({
+        ints,
+        pc,
+        hand: 'L',
+        scaleRoot: scRoot,
+        scaleIntervals: scInts,
+        bounds: vlBoundsForHand('L', cl, bh),
+        rangeMode,
+        direction,
+        seventhMode,
+        prevNotes: prevLh || null,
+        prevFingers: prevLhF || null,
+        prevAnchorIdx: prevAnchorLh ?? null,
+        prevDirection: prevDirLh ?? null,
+        drop2Base,
+        fixedInv,
+        isSlash,
+        slashName,
+        preferredMid: 52,
+        noteToScaleIdx: toScaleIdx,
+      });
+      const invNum = INV_KEY_TO_NUM[lhOut.inversion] ?? 0;
+      return {
+        notes: lhOut.notes,
+        hd: lhOut.notes.map(() => 'L'),
+        lhLen: lhOut.notes.length,
+        rhLen: 0,
+        lhInv: invNum,
+        rhInv: invNum,
+        rhOut: null,
+        lhOut,
+        vlF: lhOut.fingers,
+        rhF: [],
+        lhF: lhOut.fingers,
+        vlInfo: {
+          direction: lhOut.direction,
+          inversion: lhOut.inversion,
+          inversionLabel: lhOut.inversionLabel,
+          handShift: lhOut.handShift,
+          shapeChange: lhOut.shapeChange,
+          dirFlipped: lhOut.dirFlipped,
+          adjusted: lhOut.adjusted,
+          omittedFifth: lhOut.omittedFifth,
+          commonTonesKept: lhOut.commonTonesKept,
+          notRootPosition: lhOut.notRootPosition,
+          warning: lhOut.warning,
+        },
+      };
+    }
+
+    const rhOut = computeNextVoiceLedChord({
+      ints,
+      pc,
+      hand: 'R',
+      scaleRoot: scRoot,
+      scaleIntervals: scInts,
+      bounds: vlBoundsForHand('R', cl, bh),
+      rangeMode,
+      direction,
+      seventhMode,
+      prevNotes: prevRh || null,
+      prevFingers: prevRhF || null,
+      prevAnchorIdx: prevAnchorRh ?? null,
+      prevDirection: prevDirRh ?? null,
+      drop2Base,
+      fixedInv,
+      isSlash,
+      slashName,
+      preferredMid: 67,
+      noteToScaleIdx: toScaleIdx,
+    });
+    const rhInv = INV_KEY_TO_NUM[rhOut.inversion] ?? 0;
+
+    if (cl !== 'grand') {
+      return {
+        notes: rhOut.notes,
+        hd: rhOut.notes.map(() => 'R'),
+        lhLen: 0,
+        rhLen: rhOut.notes.length,
+        lhInv: rhInv,
+        rhInv,
+        rhOut,
+        lhOut: null,
+        vlF: rhOut.fingers,
+        rhF: rhOut.fingers,
+        lhF: [],
+        vlInfo: {
+          direction: rhOut.direction,
+          inversion: rhOut.inversion,
+          inversionLabel: rhOut.inversionLabel,
+          handShift: rhOut.handShift,
+          shapeChange: rhOut.shapeChange,
+          dirFlipped: rhOut.dirFlipped,
+          adjusted: rhOut.adjusted,
+          omittedFifth: rhOut.omittedFifth,
+          commonTonesKept: rhOut.commonTonesKept,
+          notRootPosition: rhOut.notRootPosition,
+          warning: rhOut.warning,
+        },
+      };
+    }
+
+    if (bh === 'same' || bh === 'diff') {
+      const lhMaxHi = Math.min(S.hi, Math.max(S.lo + 12, rhOut.notes[0] - 1));
+      const lhOut = computeNextVoiceLedChord({
+        ints,
+        pc,
+        hand: 'L',
+        scaleRoot: scRoot,
+        scaleIntervals: scInts,
+        bounds: [S.lo, lhMaxHi],
+        rangeMode,
+        direction,
+        seventhMode,
+        prevNotes: prevLh || null,
+        prevFingers: prevLhF || null,
+        prevAnchorIdx: prevAnchorLh ?? null,
+        prevDirection: prevDirLh ?? null,
+        drop2Base,
+        fixedInv: bh === 'same' ? rhInv : fixedInv,
+        isSlash,
+        slashName,
+        preferredMid: 50,
+        noteToScaleIdx: toScaleIdx,
+      });
+      const lhInv = INV_KEY_TO_NUM[lhOut.inversion] ?? 0;
+      return {
+        notes: [...lhOut.notes, ...rhOut.notes],
+        hd: [...lhOut.notes.map(() => 'L'), ...rhOut.notes.map(() => 'R')],
+        lhLen: lhOut.notes.length,
+        rhLen: rhOut.notes.length,
+        lhInv,
+        rhInv,
+        rhOut,
+        lhOut,
+        vlF: [...lhOut.fingers, ...rhOut.fingers],
+        rhF: rhOut.fingers,
+        lhF: lhOut.fingers,
+        vlInfo: {
+          direction: rhOut.direction,
+          inversion: rhOut.inversion,
+          inversionLabel: rhOut.inversionLabel,
+          handShift: rhOut.handShift,
+          shapeChange: rhOut.shapeChange,
+          dirFlipped: rhOut.dirFlipped,
+          adjusted: rhOut.adjusted || lhOut.adjusted,
+          omittedFifth: rhOut.omittedFifth || lhOut.omittedFifth,
+          commonTonesKept: rhOut.commonTonesKept,
+          notRootPosition: rhOut.notRootPosition || lhOut.notRootPosition,
+          warning: rhOut.warning || lhOut.warning,
+        },
+      };
+    }
+
+    // Grand clef, Bass + chord: LH plays closest bass root below RH
+    const bassPc = forceBass ?? pc;
+    const bassLo = Math.max(S.lo, 24);
+    const bassHi = Math.min(S.hi, rhOut.notes[0] - 1);
+    const bassCands: number[] = [];
+    for (let o = 0; o <= 7; o++) {
+      const m = 12 * (o + 1) + bassPc;
+      if (m >= bassLo && m <= bassHi) bassCands.push(m);
+    }
+    let bassMidi: number;
+    if (bassCands.length) {
+      const targetBass = prevLh?.length ? prevLh[0] : 42;
+      bassCands.sort((a, b) => Math.abs(a - targetBass) - Math.abs(b - targetBass));
+      bassMidi = bassCands[0];
+    } else {
+      bassMidi = Math.max(S.lo, put([0], bassPc, 0, [Math.max(S.lo, 24), 59])[0]);
+    }
+    const prevBassState =
+      prevLh?.length === 1
+        ? {
+            ns: prevLh,
+            f: prevLhF?.length === 1 ? prevLhF : [5],
+          }
+        : null;
+    const bassF = bassNoteF(bassMidi, 'L', prevBassState);
+    return {
+      notes: [bassMidi, ...rhOut.notes],
+      hd: ['L', ...rhOut.notes.map(() => 'R')],
+      lhLen: 1,
+      rhLen: rhOut.notes.length,
+      lhInv: 0,
+      rhInv,
+      rhOut,
+      lhOut: null,
+      vlF: [bassF, ...rhOut.fingers],
+      rhF: rhOut.fingers,
+      lhF: [bassF],
+      vlInfo: {
+        direction: rhOut.direction,
+        inversion: rhOut.inversion,
+        inversionLabel: rhOut.inversionLabel,
+        handShift: rhOut.handShift,
+        shapeChange: rhOut.shapeChange,
+        dirFlipped: rhOut.dirFlipped,
+        adjusted: rhOut.adjusted,
+        omittedFifth: rhOut.omittedFifth,
+        commonTonesKept: rhOut.commonTonesKept,
+        notRootPosition: rhOut.notRootPosition,
+        warning: rhOut.warning,
+      },
+    };
   }
 
   // Picks octave/inversion closest to previous chord notes for close-range voice leading
@@ -2829,7 +3240,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                   : 'R',
           ),
       );
-    } else if (q.g == 'scale' || q.g == 'mel') {
+    } else if (q.g == 'scale' || q.g == 'mel' || q.g == 'c2s_play') {
       if (q.steps && q.steps[0]?.length == 2) {
         st = q.steps;
         hd = q.steps.map(() => ['L', 'R']);
@@ -2858,9 +3269,20 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           ),
       ];
     }
+    if (!q.ch && q.vlF && q.vlF.length === st[0]?.length) {
+      return [st, hd, [q.vlF]];
+    }
     const chordBassMode =
       !q.pat && q.g != 'scale' && q.g != 'mel' && q.g != 'int';
-    return [st, hd, fingers(st, hd, prevHandState, chordBassMode)];
+    const computedF = fingers(st, hd, prevHandState, chordBassMode);
+    if (q.ch) {
+      q.ch.forEach((step: any, idx: number) => {
+        if (step.vlF && step.vlF.length === st[idx]?.length) {
+          computedF[idx] = [...step.vlF];
+        }
+      });
+    }
+    return [st, hd, computedF];
   }
 
   /* =====================================================================
@@ -3203,6 +3625,13 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         if (changedFocus && $('bhmode').value == 'bass') {
           set('bhmode', 'same');
         }
+      } else if (f == 'h_harm3' || f == 'h_harm7') {
+        g = 'harm_scale';
+        set('size', f == 'h_harm7' ? 4 : 3);
+      } else if (f == 'h_c2s') {
+        g = 'harm_c2s';
+      } else if (f == 'h_mchar') {
+        g = 'harm_mchar';
       } else {
         g = 'prog';
         S.hf =
@@ -3240,6 +3669,29 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     set('game', g);
   }
 
+  function fillModesForScale(preserveMode = false) {
+    const scEl = $('scale') as HTMLSelectElement | null;
+    const modeEl = $('mode') as HTMLSelectElement | null;
+    if (!scEl || !modeEl) return;
+    const prevMode = modeEl.value;
+    const famId = scEl.value;
+    const fam = SCALE_FAMILIES.find(f => f.id === famId);
+    const modeList = fam ? fam.modes : Object.keys(MODES);
+    const opts: [string, string][] = [
+      ['rnd', 'Any (Random)'],
+      ...modeList.map(m => [m, getModeDisplayLabel(m)] as [string, string]),
+    ];
+    modeEl.innerHTML = opts
+      .map(([v, lbl]) => `<option value="${v}">${lbl}</option>`)
+      .join('');
+    if (preserveMode && opts.some(([v]) => v === prevMode)) {
+      modeEl.value = prevMode;
+    } else {
+      modeEl.value = fam ? fam.modes[0] : 'rnd';
+    }
+    mkdd(modeEl);
+  }
+
   function fillFocus() {
     const o = $('ug').value == 'pat' ? patOpts() : FO[$('ug').value];
     let h = '';
@@ -3267,7 +3719,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const relUnsupported =
       (ug == 'chord' && (g == 'slash' || fVal == 'v_ust')) ||
       g == 'harm_guide' ||
-      g == 'harm_close';
+      g == 'harm_close' ||
+      g == 'harm_c2s' ||
+      g == 'harm_mchar';
     const relActive =
       ['chord', 'prog', 'harm'].includes(ug) &&
       $('vlead').checked &&
@@ -3307,7 +3761,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         }
       }
 
-      if (on && id == 'mode') {
+      if (on && (id == 'mode' || id == 'scale')) {
         const earEt = $('eartype').value;
         if (ug == 'chord' && !inModeOn && fVal != 'bor') {
           on = false;
@@ -3333,13 +3787,19 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           !['chosen', 'five', 'arp3', 'arp7', 'arpd', 'hanon'].includes(fVal)
         ) {
           on = false;
-          why = 'Overridden by the selected Scale focus';
+          why = 'Overridden by the selected Scale run focus';
         } else if (ug == 'prog' || ug == 'pat') {
           on = false;
           why = 'Progressions set their own tonality from Key';
         } else if (ug == 'harm' && (g == 'prog' || g == 'harm_guide')) {
           on = false;
           why = 'Cadences and fixed progressions set their own tonality from Key';
+        } else if (ug == 'harm' && g == 'harm_c2s') {
+          on = false;
+          why = 'Candidate scales are determined by each chord';
+        } else if (ug == 'harm' && g == 'harm_mchar') {
+          on = false;
+          why = 'This drill tests characteristic chords across modes';
         }
       }
 
@@ -3347,14 +3807,26 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         if (cl != 'grand') {
           on = false;
           why = 'Switch Clef to Grand (both hands) to enable';
-        } else if (g == 'slash' || g == 'harm_guide') {
+        } else if (
+          g == 'slash' ||
+          g == 'harm_guide' ||
+          g == 'harm_c2s' ||
+          g == 'harm_mchar'
+        ) {
           on = false;
-          why = 'Slash and guide-tone drills fix the bass hand';
+          why = 'Not used in this drill focus';
         }
       }
 
       if (on && id == 'lhinv') {
-        if (cl != 'grand' || bh != 'diff' || g == 'slash' || g == 'harm_guide') {
+        if (
+          cl != 'grand' ||
+          bh != 'diff' ||
+          g == 'slash' ||
+          g == 'harm_guide' ||
+          g == 'harm_c2s' ||
+          g == 'harm_mchar'
+        ) {
           on = false;
           why = 'Set Clef to Grand and Both-hands chords to Different inversions';
         } else if (relActive) {
@@ -3369,7 +3841,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           !['arp3', 'arp7', 'arpd'].includes(fVal)
         ) {
           on = false;
-          why = 'Used for arpeggio inversions in Scales';
+          why = 'Used for arpeggio inversions in Scale runs';
+        } else if (g == 'harm_c2s' || g == 'harm_mchar') {
+          on = false;
+          why = 'Inversions are fixed in this drill';
         } else if (relActive) {
           on = false;
           why = 'Relative voice leading uses all inversions of the chord';
@@ -3386,16 +3861,29 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         } else if (g == 'harm_close') {
           on = false;
           why = 'Always active in close-range voice-leading drills';
+        } else if (g == 'harm_c2s' || g == 'harm_mchar') {
+          on = false;
+          why = 'Used in chord and progression voicing drills';
         }
       }
 
       if (on && id == 'exinv') {
         if (ug == 'scale' && !['arp3', 'arp7', 'arpd'].includes(fVal)) {
           on = false;
-          why = 'Used for arpeggio inversions in Scales';
+          why = 'Used for arpeggio inversions in Scale runs';
+        } else if (g == 'harm_c2s' || g == 'harm_mchar') {
+          on = false;
+          why = 'Inversions are fixed in this drill';
         } else if (relActive) {
           on = false;
           why = 'Disabled while Relative voice leading is on';
+        }
+      }
+
+      if (on && id == 'pfmt') {
+        if (g == 'harm_c2s') {
+          on = false;
+          why = 'Chord-to-scale displays full chord names and matching scales';
         }
       }
 
@@ -3420,10 +3908,52 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       f.querySelector('.why').textContent = why;
     });
     $('pl').style.display =
-      S.studyMode == 'teach' || ug == 'ear' || S.q?.g == 'mel' ? '' : 'none';
+      S.studyMode == 'teach' ||
+      ug == 'ear' ||
+      S.q?.g == 'mel' ||
+      S.q?.g == 'c2s_play' ||
+      S.q?.g == 'mchar_play' ||
+      S.q?.isMc
+        ? ''
+        : 'none';
     syncVlBar(relActive);
+    syncScBar(g);
     segsync();
     CD.forEach(i => mkdd($(i)));
+  }
+
+  function syncScBar(gameVal?: string) {
+    const bar = $('scbar') as HTMLElement | null;
+    if (!bar) return;
+    const g = gameVal ?? $('game')?.value;
+    const isTeach = S.studyMode == 'teach';
+    const isC2s = g == 'harm_c2s';
+    const isMchar = g == 'harm_mchar';
+    const show = isC2s || (isMchar && !isTeach);
+    bar.hidden = !show;
+    if (!show) return;
+
+    const modeGroup = $('scmodegroup') as HTMLElement | null;
+    if (modeGroup) modeGroup.hidden = isTeach;
+    const modeEl = $('scmode') as HTMLElement | null;
+    if (modeEl) {
+      modeEl.querySelectorAll<HTMLButtonElement>('[data-scmode]').forEach(b => {
+        const active = b.dataset.scmode === S.scMode;
+        b.classList.toggle('on', active);
+        b.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+
+    const diffGroup = $('scdiffgroup') as HTMLElement | null;
+    if (diffGroup) diffGroup.hidden = !isC2s;
+    const diffEl = $('scdiff') as HTMLElement | null;
+    if (diffEl) {
+      diffEl.querySelectorAll<HTMLButtonElement>('[data-scdiff]').forEach(b => {
+        const active = b.dataset.scdiff === S.scDiff;
+        b.classList.toggle('on', active);
+        b.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
   }
 
   function syncVlBar(relActive?: boolean) {
@@ -3436,7 +3966,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       const relUnsupported =
         (ug == 'chord' && (g == 'slash' || fVal == 'v_ust')) ||
         g == 'harm_guide' ||
-        g == 'harm_close';
+        g == 'harm_close' ||
+        g == 'harm_c2s' ||
+        g == 'harm_mchar';
       relActive =
         ['chord', 'prog', 'harm'].includes(ug) &&
         $('vlead').checked &&
@@ -3471,6 +4003,34 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         ? `Range: Locked${rangeSpan}`
         : 'Range: Unlocked';
     }
+
+    const dirGroup = $('vldirgroup') as HTMLElement | null;
+    const dirEl = $('vldir') as HTMLElement | null;
+    if (dirGroup) {
+      dirGroup.hidden = !!S.rangeLocked;
+    }
+    if (dirEl) {
+      dirEl.querySelectorAll<HTMLButtonElement>('[data-vldir]').forEach(b => {
+        b.classList.toggle('on', b.dataset.vldir === S.vlDir);
+      });
+    }
+
+    const ugNow = $('ug')?.value;
+    const fValNow = $('focus')?.value;
+    const triadOnlyFocus =
+      ugNow === 'chord' && fValNow === 't3' && !$('altchords')?.checked;
+    const seventhGroup = $('vl7group') as HTMLElement | null;
+    const seventhEl = $('vl7') as HTMLElement | null;
+    if (seventhGroup) {
+      seventhGroup.hidden = triadOnlyFocus;
+    }
+    if (seventhEl) {
+      seventhEl.querySelectorAll<HTMLButtonElement>('[data-vl7]').forEach(b => {
+        const active = b.dataset.vl7 === S.vl7Mode;
+        b.classList.toggle('on', active);
+        b.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
   }
 
   /* =====================================================================
@@ -3480,6 +4040,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     'ug',
     'focus',
     'key',
+    'scale',
     'mode',
     'bhmode',
     'inv',
@@ -3581,7 +4142,18 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       return;
     }
 
-    if (q.g == 'scale' || q.g == 'mel') {
+    if (q.g == 'scale' || q.g == 'mel' || q.g == 'c2s_play') {
+      if (q.chordExp && q.chordExp.length) {
+        q.chordExp.forEach((m: number, i: number) =>
+          audioEngine.playNote(m, i * 0.035, 0.9, sndPreset, i === 0 ? 0.68 : 0.76),
+        );
+        if ((S.studyMode == 'teach' || q.done || q.revealed) && q.seq?.length) {
+          q.seq.forEach((m: number, idx: number) =>
+            audioEngine.playNote(m, 0.78 + idx * 0.22, 0.3, sndPreset, 0.76),
+          );
+        }
+        return;
+      }
       if (q.steps && q.steps.length) {
         q.steps.forEach((step: number[], idx: number) => {
           step.forEach((m: number, ni: number) =>
@@ -3591,6 +4163,30 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       } else if (q.seq && q.seq.length) {
         q.seq.forEach((m: number, idx: number) =>
           audioEngine.playNote(m, idx * 0.25, 0.32, sndPreset, 0.78),
+        );
+      }
+      return;
+    }
+
+    if (q.g == 'harm_c2s' && q.chordExp?.length) {
+      q.chordExp.forEach((m: number, i: number) =>
+        audioEngine.playNote(m, i * 0.035, 1.0, sndPreset, i === 0 ? 0.68 : 0.76),
+      );
+      if ((q.done || q.revealed) && q.primarySeq?.length) {
+        q.primarySeq.forEach((m: number, idx: number) =>
+          audioEngine.playNote(m, 0.8 + idx * 0.22, 0.3, sndPreset, 0.76),
+        );
+      }
+      return;
+    }
+
+    if ((q.g == 'mchar_play' || q.g == 'harm_mchar') && q.tonicExp?.length) {
+      q.tonicExp.forEach((m: number, i: number) =>
+        audioEngine.playNote(m, i * 0.03, 0.75, sndPreset, i === 0 ? 0.68 : 0.74),
+      );
+      if ((S.studyMode == 'teach' || q.done || q.revealed) && q.exp?.length) {
+        q.exp.forEach((m: number, i: number) =>
+          audioEngine.playNote(m, 0.68 + i * 0.035, 1.3, sndPreset, i === 0 ? 0.7 : 0.78),
         );
       }
       return;
@@ -3658,6 +4254,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     q.hd = c.hd;
     q.lhLen = c.lhLen;
     q.rhLen = c.rhLen;
+    q.vlInfo = c.vlInfo || null;
     q.main =
       fmt == 'roman'
         ? q.rom[q.pos]
@@ -4126,6 +4723,30 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         bits.push(row('Suggested fingering', fmtF));
       }
     }
+    if (q.vlInfo) {
+      const m = q.vlInfo;
+      const vlParts: string[] = [];
+      if (S.rangeLocked) {
+        vlParts.push('Locked window', m.inversionLabel);
+      } else {
+        const arr = m.direction === 'down' ? '↓' : '↑';
+        const sh =
+          m.handShift === 0
+            ? 'shift 0'
+            : `shift ${m.handShift > 0 ? '+' : ''}${m.handShift}`;
+        vlParts.push(
+          `${arr} ${m.direction}`,
+          m.inversionLabel,
+          sh,
+          m.shapeChange ? 'shape changed' : 'same shape',
+        );
+      }
+      if (m.commonTonesKept > 0) vlParts.push(`common ${m.commonTonesKept}`);
+      if (m.adjusted) vlParts.push('adjusted');
+      if (m.omittedFifth) vlParts.push('5th omitted');
+      bits.push(row('Voice leading', vlParts.join(' · ')));
+      if (m.warning) bits.push(row('Voice-leading note', m.warning));
+    }
     if (q.tinfo) bits.push(para(q.tinfo));
     if (q.g == 'prog' || q.g == 'pat') {
       bits.push(
@@ -4149,6 +4770,30 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     return `<div class="teach-guide-sep"></div>` + bits.join('');
   }
 
+  function degTableHTML(
+    degrees: HarmonizedDegreeInfo[],
+    activeDegrees: number[] = [],
+  ) {
+    return (
+      `<div class="harm-deg-table">` +
+      degrees
+        .map(d => {
+          const on = activeDegrees.includes(d.degree);
+          return (
+            `<div class="harm-deg-row${on ? ' on' : ''}">` +
+            `<span class="deg-rom">${d.roman}</span>` +
+            `<span class="deg-nns">${d.nashville}</span>` +
+            `<span class="deg-name">${d.chordName}</span>` +
+            `<span class="deg-qual">${d.qualityLabel}</span>` +
+            `<span class="deg-notes">${d.noteNames.join(' ')}</span>` +
+            `</div>`
+          );
+        })
+        .join('') +
+      `</div>`
+    );
+  }
+
   function infoHTML(q: any) {
     const c = q.ci;
     if (!c) return '';
@@ -4156,7 +4801,52 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (c.k == 'chord') base = chordInfo(c);
     else if (c.k == 'scale') base = scaleInfo(c);
     else if (c.k == 'int') base = intInfo(c);
-    else if (c.k == 'pat')
+    else if (c.k == 'harm_scale') {
+      const modeLbl = getModeDisplayLabel(C.m);
+      const activeDegs =
+        c.deg != null
+          ? [c.deg]
+          : q.ch
+            ? [q.pos % c.degrees.length]
+            : [];
+      base =
+        `<h4>${C.k} ${modeLbl} · Harmonized ${c.sz == 4 ? '7th chords' : 'triads'}</h4>` +
+        para(
+          `Chords are built by stacking thirds (${c.sz == 4 ? '1–3–5–7' : '1–3–5'}) from the scale notes. Every quality follows directly from the mode's interval steps.`,
+        ) +
+        row('Scale notes', chips(c.scaleNames || C.names)) +
+        degTableHTML(c.degrees, activeDegs);
+    } else if (c.k == 'harm_c2s') {
+      base =
+        `<h4>${c.chordName} → Matching Scales</h4>` +
+        (c.contextLabel ? row('Context', c.contextLabel) : '') +
+        row('Chord tones', chips(c.chordNotes)) +
+        row('Primary scale', c.validNames[0]) +
+        (c.validNames.length > 1
+          ? row('Other valid options', c.validNames.slice(1).join(' · '))
+          : '') +
+        para(c.explanation) +
+        row(`${c.validNames[0]} notes`, chips(c.scaleNotes));
+    } else if (c.k == 'harm_mchar') {
+      base =
+        `<h4>${c.keyName} ${getModeDisplayLabel(c.mode)} · Mode Character</h4>` +
+        row('Characteristic note', c.characteristicNote) +
+        row(
+          'Characteristic chord',
+          `${c.primary.roman} · ${c.primary.chordName} (Nashville ${c.primary.nashville})`,
+        ) +
+        (c.alternates?.length
+          ? row(
+              'Also characteristic',
+              c.alternates
+                .map((a: HarmonizedDegreeInfo) => `${a.roman} (${a.chordName})`)
+                .join(' · '),
+            )
+          : '') +
+        para(c.summary) +
+        para(c.cadenceHint) +
+        degTableHTML(c.degrees, c.characteristicChordDegrees || []);
+    } else if (c.k == 'pat')
       base =
         `<h4>${q.pn.split(' · ')[1]}</h4>` +
         para(GF[c.g]) +
@@ -4193,6 +4883,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           int: S.studyMode == 'teach' ? 'Interval Class' : 'Interval',
           pat: S.studyMode == 'teach' ? 'Pattern Class' : 'Pattern',
           prog: S.studyMode == 'teach' ? 'Progression Class' : 'Progression',
+          harm_scale:
+            S.studyMode == 'teach' ? 'Scale Harmony Class' : 'Scale Harmony',
+          harm_c2s:
+            S.studyMode == 'teach' ? 'Chord to Scale Class' : 'Chord to Scale',
+          harm_mchar:
+            S.studyMode == 'teach' ? 'Mode Character Class' : 'Mode Character',
         } as any
       )[q.ci?.k] || (S.studyMode == 'teach' ? 'Class Details' : 'Details');
     $('ib').innerHTML = infoHTML(q);
@@ -4394,6 +5090,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
   function newQ() {
     applyFocus();
+    hideShiftOverlay();
     ctx();
     $('ans').innerHTML = '';
 
@@ -4536,19 +5233,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         const hasPrev = !!(S.prevRh?.length || S.prevLh?.length);
         const startFreeAnyOct = useSmoothChord && !tolExact && !S.relLocked;
 
-        // When Unlocked, periodically allow the system to shift range so the player adjusts
-        let rhShiftOffset = 0;
-        if (useSmoothChord && hasPrev && !S.rangeLocked && S.prevRh?.length) {
-          const prevAvg =
-            S.prevRh.reduce((a: number, b: number) => a + b, 0) /
-            S.prevRh.length;
-          if (prevAvg < 56) rhShiftOffset = 5;
-          else if (prevAvg > 78) rhShiftOffset = -5;
-          else if (S.n > 0 && S.n % 5 === 0) {
-            rhShiftOffset = prevAvg >= 68 ? -6 : 6;
-          }
-        }
-
         if (useSmoothChord && hasPrev) {
           q.prevRh = S.prevRh ? [...S.prevRh] : null;
           q.prevLh = S.prevLh ? [...S.prevLh] : null;
@@ -4558,28 +5242,76 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
         const isFixedShapeVoicing = c.v == 'open' || c.v == 'quartal';
         const isDrop2Voicing = c.v == 'drop2';
-        const lockRhZone =
-          useSmoothChord && S.rangeLocked ? S.lockZoneRh : null;
-        const lockLhZone =
-          useSmoothChord && S.rangeLocked ? S.lockZoneLh : null;
-        const voiced = voice(
-          c.ints,
-          c.pc,
-          isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : inv,
-          isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : lhInv,
-          undefined,
-          useSmoothChord ? S.prevRh : null,
-          useSmoothChord,
-          useSmoothChord ? S.prevLh : null,
-          useSmoothChord,
-          useSmoothChord ? S.homeRhAvg : null,
-          useSmoothChord ? S.homeLhAvg : null,
-          isFixedShapeVoicing ? 0 : undefined,
-          isDrop2Voicing ? c.base : undefined,
-          lockRhZone,
-          lockLhZone,
-          rhShiftOffset,
-        );
+        const bh = curBh();
+        const useSlidingEngine = useSmoothChord && !isFixedShapeVoicing;
+
+        let voiced: {
+          notes: number[];
+          hd: string[];
+          lhLen: number;
+          rhLen: number;
+          lhInv: number;
+          rhInv: number;
+        };
+        let engRes: EngineVoicedResult | null = null;
+
+        if (useSlidingEngine) {
+          engRes = runEngineVoice({
+            ints: c.ints,
+            pc: c.pc,
+            cl,
+            bh,
+            rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+            direction: S.vlDir,
+            prevRh: hasPrev ? S.prevRh : null,
+            prevRhF: hasPrev ? (S.prevRhF as number[] | null) : null,
+            prevAnchorRh: hasPrev ? S.vlAnchorRh : null,
+            prevDirRh: hasPrev ? S.vlPrevDirRh : null,
+            prevLh: hasPrev ? S.prevLh : null,
+            prevLhF: hasPrev ? (S.prevLhF as number[] | null) : null,
+            prevAnchorLh: hasPrev ? S.vlAnchorLh : null,
+            prevDirLh: hasPrev ? S.vlPrevDirLh : null,
+            drop2Base: isDrop2Voicing ? c.base : undefined,
+            fixedInv: !hasPrev ? 0 : undefined,
+          });
+          voiced = engRes;
+          q.vlF = engRes.vlF;
+          q.vlRhF = engRes.rhF;
+          q.vlLhF = engRes.lhF;
+          q.vlInfo = engRes.vlInfo;
+          q.nextVlAnchorRh = engRes.rhOut?.anchorIdx ?? null;
+          q.nextVlAnchorLh = engRes.lhOut?.anchorIdx ?? null;
+          q.nextVlDirRh = engRes.rhOut?.direction ?? null;
+          q.nextVlDirLh = engRes.lhOut?.direction ?? null;
+
+          if (engRes.vlInfo.dirFlipped && S.vlDir !== 'auto') {
+            S.vlDir = engRes.vlInfo.direction;
+          }
+        } else {
+          const lockRhZone =
+            useSmoothChord && S.rangeLocked ? S.lockZoneRh : null;
+          const lockLhZone =
+            useSmoothChord && S.rangeLocked ? S.lockZoneLh : null;
+          voiced = voice(
+            c.ints,
+            c.pc,
+            isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : inv,
+            isFixedShapeVoicing || (useSmoothChord && !hasPrev) ? 0 : lhInv,
+            undefined,
+            useSmoothChord ? S.prevRh : null,
+            useSmoothChord,
+            useSmoothChord ? S.prevLh : null,
+            useSmoothChord,
+            useSmoothChord ? S.homeRhAvg : null,
+            useSmoothChord ? S.homeLhAvg : null,
+            isFixedShapeVoicing ? 0 : undefined,
+            isDrop2Voicing ? c.base : undefined,
+            lockRhZone,
+            lockLhZone,
+            0,
+          );
+        }
+
         q.exp = voiced.notes;
         q.hd = voiced.hd;
         q.lhLen = voiced.lhLen;
@@ -4590,25 +5322,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           useSmoothChord &&
           (tolExact || (S.relLocked && S.rangeLocked));
 
-        const bh = curBh();
         const isBothSame = bh == 'same';
         const isBothDiff = bh == 'diff';
         actualInv = isFixedShapeVoicing ? 0 : useSmoothChord ? voiced.rhInv : inv;
         actualLhInv = isFixedShapeVoicing ? 0 : useSmoothChord ? voiced.lhInv : lhInv;
-
-        // Notify user if Unlocked system range shifted substantially from previous chord
-        if (useSmoothChord && hasPrev && !S.rangeLocked && S.prevRh?.length && voiced.rhLen > 0) {
-          const newRh = voiced.notes.slice(voiced.lhLen);
-          const prevAvg =
-            S.prevRh.reduce((a: number, b: number) => a + b, 0) /
-            S.prevRh.length;
-          const newAvg =
-            newRh.reduce((a: number, b: number) => a + b, 0) / newRh.length;
-          if (Math.abs(newAvg - prevAvg) >= 4) {
-            const {tones, dir} = scaleStepsDelta(prevAvg, newAvg);
-            showShiftOverlay(tones, dir);
-          }
-        }
 
         // Only pre-seed Exact-octave chain on newQ; Any-octave locks once the player plays the start chord
         if (useSmoothChord && tolExact && !hasPrev) {
@@ -4616,6 +5333,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             voiced.rhLen > 0 ? voiced.notes.slice(voiced.lhLen) : null;
           S.prevLh =
             voiced.lhLen > 0 ? voiced.notes.slice(0, voiced.lhLen) : null;
+          if (engRes) {
+            S.prevRhF = engRes.rhF.length ? engRes.rhF : null;
+            S.prevLhF = engRes.lhF.length ? engRes.lhF : null;
+            S.vlAnchorRh = engRes.rhOut?.anchorIdx ?? null;
+            S.vlAnchorLh = engRes.lhOut?.anchorIdx ?? null;
+            S.vlPrevDirRh = engRes.rhOut?.direction ?? (S.vlDir === 'down' ? 'down' : 'up');
+            S.vlPrevDirLh = engRes.lhOut?.direction ?? (S.vlDir === 'down' ? 'down' : 'up');
+          }
           if (S.prevRh?.length)
             S.homeRhAvg =
               S.prevRh.reduce((a: number, b: number) => a + b, 0) /
@@ -4625,8 +5350,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               S.prevLh.reduce((a: number, b: number) => a + b, 0) /
               S.prevLh.length;
           if (S.rangeLocked) {
-            S.lockZoneRh = S.prevRh?.length ? computeLockCorridor(S.prevRh) : null;
-            S.lockZoneLh = S.prevLh?.length ? computeLockCorridor(S.prevLh) : null;
+            if (S.vlAnchorRh != null && S.prevRh?.length) {
+              S.lockZoneRh = windowMidiCorridor(S.vlAnchorRh, S.prevRh.length, vlBoundsForHand('R', cl, bh));
+            } else {
+              S.lockZoneRh = S.prevRh?.length ? computeLockCorridor(S.prevRh) : null;
+            }
+            if (S.vlAnchorLh != null && S.prevLh?.length && S.prevLh.length > 1) {
+              S.lockZoneLh = windowMidiCorridor(S.vlAnchorLh, S.prevLh.length, vlBoundsForHand('L', cl, bh));
+            } else {
+              S.lockZoneLh = S.prevLh?.length ? computeLockCorridor(S.prevLh) : null;
+            }
           }
           S.relLocked = true;
         }
@@ -4667,11 +5400,11 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         q.top = `${ctxT} · ${CL}`;
         q.topAnon = CL;
         if (useSmoothChord) {
-          const lockStatus = S.rangeLocked ? 'Locked range' : 'Relative range';
+          const lockStatus = S.rangeLocked ? 'Locked range' : 'Unlocked sliding';
           q.sub =
             (q.type ? 'Play the ' + q.type + ' · ' : '') +
             (hasPrev
-              ? `Closest position (${lockStatus})`
+              ? `${invDesc} (${lockStatus})`
               : startFreeAnyOct
                 ? `Start in any octave · ${invDesc}`
                 : `Primary anchor (${IR[S.primDeg]}) · ${invDesc}`);
@@ -4922,6 +5655,495 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       q.ci = {k: 'prog'};
       q.ans = q.ch.map((c: any) => c.name).join(' → ');
       pset(q);
+    } else if (g == 'harm_scale') {
+      const sz: 3 | 4 = +$('size').value == 4 ? 4 : 3;
+      const degrees = harmonizeScaleDegrees(C.sc, sz, C.r, C.names);
+      const smooth = $('vlead').checked;
+      const tolExact = $('tol').value == 'exact';
+      const bh = curBh();
+
+      if (ORD()) {
+        q.g = 'prog';
+        q.pn = `${C.k} ${getModeDisplayLabel(C.m)} (${sz == 4 ? '7ths' : 'triads'})`;
+        q.relProg = smooth;
+        q.relLocked = smooth && tolExact;
+        q.rom = degrees.map(d => d.roman);
+        q.nns = degrees.map(d => d.nashville);
+        q.nnsLine = q.nns.join(' – ');
+
+        let prevRh: number[] | null = null;
+        let prevLh: number[] | null = null;
+        let prevRhF: number[] | null = null;
+        let prevLhF: number[] | null = null;
+        let prevAnchorRh: number | null = null;
+        let prevAnchorLh: number | null = null;
+        let prevDirRh: VLDirection | null = S.vlDir === 'down' ? 'down' : 'up';
+        let prevDirLh: VLDirection | null = S.vlDir === 'down' ? 'down' : 'up';
+        let progDir: VLDirectionSetting = S.vlDir;
+
+        if (smooth && S.primDeg > 0 && C.sc.length == 7) {
+          const anchorD = degrees[S.primDeg % 7];
+          const aRes = runEngineVoice({
+            ints: anchorD.ints,
+            pc: anchorD.pc,
+            cl,
+            bh,
+            rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+            direction: progDir,
+            fixedInv: 0,
+          });
+          prevRh = aRes.rhLen > 0 ? aRes.notes.slice(aRes.lhLen) : null;
+          prevLh = aRes.lhLen > 0 ? aRes.notes.slice(0, aRes.lhLen) : null;
+          prevRhF = aRes.rhF.length ? aRes.rhF : null;
+          prevLhF = aRes.lhF.length ? aRes.lhF : null;
+          prevAnchorRh = aRes.rhOut?.anchorIdx ?? null;
+          prevAnchorLh = aRes.lhOut?.anchorIdx ?? null;
+          prevDirRh = aRes.rhOut?.direction ?? prevDirRh;
+          prevDirLh = aRes.lhOut?.direction ?? prevDirLh;
+        }
+
+        q.ch = degrees.map((dInfo, stepIdx) => {
+          const mx = Math.min(mi, dInfo.ints.length - 1);
+          const inv =
+            smooth && stepIdx === 0 && !prevRh && !prevLh
+              ? 0
+              : $('exinv').checked
+                ? mx
+                : rand(mx + 1);
+          if (smooth) {
+            const eRes = runEngineVoice({
+              ints: dInfo.ints,
+              pc: dInfo.pc,
+              cl,
+              bh,
+              rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+              direction: progDir,
+              prevRh,
+              prevRhF,
+              prevAnchorRh,
+              prevDirRh,
+              prevLh,
+              prevLhF,
+              prevAnchorLh,
+              prevDirLh,
+              fixedInv: stepIdx === 0 && !prevRh && !prevLh ? 0 : undefined,
+            });
+            if (eRes.vlInfo.dirFlipped && progDir !== 'auto') {
+              progDir = eRes.vlInfo.direction;
+            }
+            if (eRes.rhLen > 0) prevRh = eRes.notes.slice(eRes.lhLen);
+            if (eRes.lhLen > 0) prevLh = eRes.notes.slice(0, eRes.lhLen);
+            if (eRes.rhF.length) prevRhF = eRes.rhF;
+            if (eRes.lhF.length) prevLhF = eRes.lhF;
+            if (eRes.rhOut) {
+              prevAnchorRh = eRes.rhOut.anchorIdx;
+              prevDirRh = eRes.rhOut.direction;
+            }
+            if (eRes.lhOut) {
+              prevAnchorLh = eRes.lhOut.anchorIdx;
+              prevDirLh = eRes.lhOut.direction;
+            }
+            if (stepIdx === 0 && S.rangeLocked && !S.lockZoneRh) {
+              if (prevAnchorRh != null && prevRh?.length) {
+                S.lockZoneRh = windowMidiCorridor(
+                  prevAnchorRh,
+                  prevRh.length,
+                  vlBoundsForHand('R', cl, bh),
+                );
+              }
+              if (prevAnchorLh != null && prevLh?.length && prevLh.length > 1) {
+                S.lockZoneLh = windowMidiCorridor(
+                  prevAnchorLh,
+                  prevLh.length,
+                  vlBoundsForHand('L', cl, bh),
+                );
+              }
+            }
+            return {
+              name: dInfo.chordName,
+              sf: dInfo.suffix,
+              ints: dInfo.ints,
+              pc: dInfo.pc,
+              exp: eRes.notes,
+              hd: eRes.hd,
+              lhLen: eRes.lhLen,
+              rhLen: eRes.rhLen,
+              vlF: eRes.vlF,
+              vlInfo: eRes.vlInfo,
+            };
+          }
+          const voiced = voice(
+            dInfo.ints,
+            dInfo.pc,
+            inv,
+            lhi,
+            undefined,
+            prevRh,
+            false,
+            prevLh,
+            false,
+          );
+          if (voiced.rhLen > 0) prevRh = voiced.notes.slice(voiced.lhLen);
+          if (voiced.lhLen > 0) prevLh = voiced.notes.slice(0, voiced.lhLen);
+          return {
+            name: dInfo.chordName,
+            sf: dInfo.suffix,
+            ints: dInfo.ints,
+            pc: dInfo.pc,
+            exp: voiced.notes,
+            hd: voiced.hd,
+            lhLen: voiced.lhLen,
+            rhLen: voiced.rhLen,
+          };
+        });
+        q.lab = `harmonize ${C.m} (${sz == 4 ? '7ths' : 'triads'})`;
+        q.ci = {k: 'harm_scale', degrees, sz, scaleNames: C.names};
+        q.ans = degrees.map(d => d.chordName).join(' → ');
+        pset(q);
+      } else {
+        const deg = rand(degrees.length);
+        const dInfo = degrees[deg];
+        const hasPrev = !!(S.prevRh?.length || S.prevLh?.length);
+        if (smooth && hasPrev) {
+          q.prevRh = S.prevRh ? [...S.prevRh] : null;
+          q.prevLh = S.prevLh ? [...S.prevLh] : null;
+          q.prevRhF = S.prevRhF ? [...S.prevRhF] : null;
+          q.prevLhF = S.prevLhF ? [...S.prevLhF] : null;
+        }
+        const mx = Math.min(mi, dInfo.ints.length - 1);
+        const inv = $('exinv').checked ? mx : rand(mx + 1);
+        const mxL = Math.min(lhi, dInfo.ints.length - 1);
+        const lhInv = curBh() == 'diff' ? ($('exinv').checked ? mxL : rand(mxL + 1)) : inv;
+
+        let voiced: {
+          notes: number[];
+          hd: string[];
+          lhLen: number;
+          rhLen: number;
+          lhInv: number;
+          rhInv: number;
+        };
+        let engRes: EngineVoicedResult | null = null;
+        if (smooth) {
+          engRes = runEngineVoice({
+            ints: dInfo.ints,
+            pc: dInfo.pc,
+            cl,
+            bh,
+            rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+            direction: S.vlDir,
+            prevRh: hasPrev ? S.prevRh : null,
+            prevRhF: hasPrev ? (S.prevRhF as number[] | null) : null,
+            prevAnchorRh: hasPrev ? S.vlAnchorRh : null,
+            prevDirRh: hasPrev ? S.vlPrevDirRh : null,
+            prevLh: hasPrev ? S.prevLh : null,
+            prevLhF: hasPrev ? (S.prevLhF as number[] | null) : null,
+            prevAnchorLh: hasPrev ? S.vlAnchorLh : null,
+            prevDirLh: hasPrev ? S.vlPrevDirLh : null,
+            fixedInv: !hasPrev ? 0 : undefined,
+          });
+          voiced = engRes;
+          q.vlF = engRes.vlF;
+          q.vlRhF = engRes.rhF;
+          q.vlLhF = engRes.lhF;
+          q.vlInfo = engRes.vlInfo;
+          q.nextVlAnchorRh = engRes.rhOut?.anchorIdx ?? null;
+          q.nextVlAnchorLh = engRes.lhOut?.anchorIdx ?? null;
+          q.nextVlDirRh = engRes.rhOut?.direction ?? null;
+          q.nextVlDirLh = engRes.lhOut?.direction ?? null;
+          if (engRes.vlInfo.dirFlipped && S.vlDir !== 'auto') {
+            S.vlDir = engRes.vlInfo.direction;
+          }
+        } else {
+          voiced = voice(dInfo.ints, dInfo.pc, inv, lhInv);
+        }
+
+        q.g = 'chord';
+        q.exp = voiced.notes;
+        q.hd = voiced.hd;
+        q.lhLen = voiced.lhLen;
+        q.rhLen = voiced.rhLen;
+        q.isRelChord = smooth;
+        q.relHasPrev = smooth && hasPrev;
+        q.isRelAnchored = smooth && (tolExact || (S.relLocked && S.rangeLocked));
+
+        if (smooth && tolExact && !hasPrev) {
+          S.prevRh = voiced.rhLen > 0 ? voiced.notes.slice(voiced.lhLen) : null;
+          S.prevLh = voiced.lhLen > 0 ? voiced.notes.slice(0, voiced.lhLen) : null;
+          if (engRes) {
+            S.prevRhF = engRes.rhF.length ? engRes.rhF : null;
+            S.prevLhF = engRes.lhF.length ? engRes.lhF : null;
+            S.vlAnchorRh = engRes.rhOut?.anchorIdx ?? null;
+            S.vlAnchorLh = engRes.lhOut?.anchorIdx ?? null;
+            S.vlPrevDirRh = engRes.rhOut?.direction ?? (S.vlDir === 'down' ? 'down' : 'up');
+            S.vlPrevDirLh = engRes.lhOut?.direction ?? (S.vlDir === 'down' ? 'down' : 'up');
+          }
+          if (S.prevRh?.length)
+            S.homeRhAvg = S.prevRh.reduce((a: number, b: number) => a + b, 0) / S.prevRh.length;
+          if (S.prevLh?.length)
+            S.homeLhAvg = S.prevLh.reduce((a: number, b: number) => a + b, 0) / S.prevLh.length;
+          if (S.rangeLocked) {
+            if (S.vlAnchorRh != null && S.prevRh?.length) {
+              S.lockZoneRh = windowMidiCorridor(S.vlAnchorRh, S.prevRh.length, vlBoundsForHand('R', cl, bh));
+            }
+            if (S.vlAnchorLh != null && S.prevLh?.length && S.prevLh.length > 1) {
+              S.lockZoneLh = windowMidiCorridor(S.vlAnchorLh, S.prevLh.length, vlBoundsForHand('L', cl, bh));
+            }
+          }
+          S.relLocked = true;
+        }
+
+        const invDesc =
+          cl == 'grand' && bh == 'diff'
+            ? `LH: ${INV[voiced.lhInv]} · RH: ${INV[voiced.rhInv]}`
+            : cl == 'grand' && bh == 'bass'
+              ? `RH: ${INV[voiced.rhInv]}`
+              : INV[voiced.rhInv];
+
+        q.refreshLabels = () => {
+          const fmt = $('pfmt').value;
+          const modeLbl = getModeDisplayLabel(C.m);
+          if (fmt == 'roman') {
+            q.main = `${dInfo.roman} in ${C.k} ${modeLbl}`;
+            q.sub = `${dInfo.qualityLabel} · Nashville ${dInfo.nashville} · ${invDesc}`;
+          } else if (fmt == 'nns') {
+            q.main = `${dInfo.nashville} in ${C.k} ${modeLbl}`;
+            q.sub = `${dInfo.qualityLabel} · Roman ${dInfo.roman} · ${invDesc}`;
+          } else {
+            q.main = `${dInfo.chordName} in ${C.k} ${modeLbl}`;
+            q.sub = `Degree ${dInfo.roman} (Nashville ${dInfo.nashville}) · ${dInfo.qualityLabel} · ${invDesc}`;
+          }
+          if (smooth && !hasPrev && !tolExact && !S.relLocked) {
+            q.sub += ' · Start in any octave';
+          }
+        };
+        q.refreshLabels();
+        q.top = `${C.k} ${getModeDisplayLabel(C.m)} · ${CL}`;
+        q.topAnon = CL;
+        q.lab = `harmonize ${C.m} ${dInfo.roman}`;
+        q.ans = `${dInfo.chordName} (${dInfo.roman} · ${q.exp.map((m: number) => sm(m).n).join(' ')})`;
+        q.ci = {k: 'harm_scale', degrees, sz, deg, scaleNames: C.names};
+      }
+    } else if (g == 'harm_c2s') {
+      const pool = CHORD_TO_SCALE_SPECS.filter(s =>
+        S.scDiff === 'beginner' ? s.difficulty === 'beginner' : true,
+      );
+      const spec = ORD() ? pool[S.n % pool.length] : pk(pool);
+      const pc = C.r;
+      const spList = spellChord(pc, spec.ints, spec.suffix);
+      spList.forEach(([t, l, a]) => {
+        C.sp[t] = {l, a};
+      });
+      const chordNotes = spList.map(([_t, l, a]) => LN[l] + ACC[a]);
+      const chordName = pn(pc) + prettyChordSuffix(spec.suffix);
+      const validNames = (
+        S.scDiff === 'beginner' ? spec.beginnerScales : spec.advancedScales
+      ).filter(n => !!(MODES[n] || SCALES[n]));
+      const validScaleOpts = validNames.map(name => ({
+        name,
+        fullInts: [...(MODES[name] || SCALES[name]), 12],
+      }));
+      const primarySeq = put(validScaleOpts[0].fullInts, pc, 0, [57, 84]);
+      const primaryScaleNames = (MODES[validNames[0]] || SCALES[validNames[0]]).map(
+        (iv: number) => {
+          const p = (pc + iv) % 12;
+          const z = C.sp[p];
+          return z ? LN[z.l] + ACC[z.a] : pn(p);
+        },
+      );
+      const chordExp = put(spec.ints, pc, 0, cl == 'bass' ? [36, 62] : [48, 76]);
+      const allModeScales = [...Object.keys(MODES), ...Object.keys(SCALES)];
+
+      if (S.scMode == 'quiz' && S.studyMode != 'teach') {
+        q.g = 'harm_c2s';
+        q.isMc = true;
+        q.chordExp = chordExp;
+        q.primarySeq = primarySeq;
+        q.exp = chordExp;
+        q.validSet = new Set(validNames);
+        q.validNames = validNames;
+        q.key = validNames[0];
+        const distractorPool = allModeScales.filter(n => !validNames.includes(n));
+        const pickedDistractors: string[] = [];
+        while (pickedDistractors.length < 3 && distractorPool.length) {
+          const idx = rand(distractorPool.length);
+          pickedDistractors.push(distractorPool.splice(idx, 1)[0]);
+        }
+        q.opts = [...new Set([validNames[0], ...pickedDistractors])].sort(
+          () => Math.random() - 0.5,
+        );
+        q.onChoice = (picked: string) => {
+          const isOk = q.validSet.has(picked);
+          const others = validNames.filter((n: string) => n !== picked);
+          q.tinfo = isOk
+            ? others.length
+              ? `✓ Accepted: ${picked} (also valid: ${others.join(', ')})`
+              : `✓ Accepted: ${picked}`
+            : `Not quite — valid scales: ${validNames.join(' · ')}`;
+          const rawInts = MODES[picked] || SCALES[picked];
+          if (rawInts) {
+            const seqToPlay = put([...rawInts, 12], pc, 0, [57, 84]);
+            audioEngine.resume();
+            const sndPreset = curSound();
+            seqToPlay.forEach((m: number, idx: number) =>
+              audioEngine.playNote(m, idx * 0.2, 0.28, sndPreset, 0.74),
+            );
+          }
+          return isOk;
+        };
+        q.main = spec.contextLabel
+          ? `${chordName} (${spec.contextLabel})`
+          : chordName;
+        q.sub = 'Choose a scale that fits this chord';
+      } else {
+        q.g = 'c2s_play';
+        q.exp = primarySeq;
+        q.seq = primarySeq;
+        q.spread = true;
+        q.chordExp = chordExp;
+        q.primarySeq = primarySeq;
+        q.validScaleOpts = validScaleOpts;
+        q.validNames = validNames;
+        q.pc = pc;
+        q.c2sNotes = [];
+        q.main = spec.contextLabel
+          ? `${chordName} (${spec.contextLabel})`
+          : chordName;
+        q.sub =
+          S.studyMode == 'teach'
+            ? `Valid: ${validNames.join(' · ')} — play ascending`
+            : `Play any matching scale ascending (${validNames.length > 1 ? validNames.length + ' valid scales' : 'root to octave'})`;
+      }
+
+      q.top = `${pn(pc)} chord · ${S.scDiff === 'beginner' ? 'Beginner' : 'Advanced'}`;
+      q.topAnon = CL;
+      q.lab = `chord→scale: ${spec.suffix}`;
+      q.ans = `${validNames[0]}${validNames.length > 1 ? ' (or ' + validNames.slice(1).join(', ') + ')' : ''} · ${primaryScaleNames.join(' ')}`;
+      q.ci = {
+        k: 'harm_c2s',
+        chordName,
+        chordNotes,
+        contextLabel: spec.contextLabel,
+        validNames,
+        explanation: spec.explanation,
+        scaleNotes: primaryScaleNames,
+      };
+    } else if (g == 'harm_mchar') {
+      const spec = ORD()
+        ? MODE_CHARACTER_SPECS[S.n % MODE_CHARACTER_SPECS.length]
+        : pk(MODE_CHARACTER_SPECS);
+      C = buildCtx(C.k, spec.mode);
+      const degrees = harmonizeScaleDegrees(C.sc, spec.chordSize, C.r, C.names);
+      const primary = degrees[spec.primaryChordDegree];
+      const alternates = (spec.alternateChordDegrees || [])
+        .map(idx => degrees[idx])
+        .filter(Boolean);
+      const tonicDeg = degrees[0];
+      const tonicZone = cl == 'bass' ? [36, 62] : [57, 81];
+      const tonicExp = put(tonicDeg.ints, tonicDeg.pc, 0, tonicZone);
+      const primaryExp = put(primary.ints, primary.pc, 0, tonicZone);
+      const acceptedList = [primary, ...alternates];
+      const acceptedExps = acceptedList.map(d => put(d.ints, d.pc, 0, tonicZone));
+      const acceptedNames = new Set(acceptedList.map(d => d.chordName));
+
+      const fmtDegLbl = (d: HarmonizedDegreeInfo) => {
+        const fmt = $('pfmt').value;
+        if (fmt == 'roman') return `${d.roman} (${d.chordName})`;
+        if (fmt == 'nns') return `${d.nashville} (${d.chordName})`;
+        return `${d.chordName} (${d.roman})`;
+      };
+
+      if (S.scMode == 'quiz' && S.studyMode != 'teach') {
+        q.g = 'harm_mchar';
+        q.isMc = true;
+        q.tonicExp = tonicExp;
+        q.exp = primaryExp;
+        q.key = primary.chordName;
+        q.validSet = acceptedNames;
+        const distPool = degrees.filter(d => !acceptedNames.has(d.chordName));
+        const pickedDist: HarmonizedDegreeInfo[] = [];
+        while (pickedDist.length < 3 && distPool.length) {
+          pickedDist.push(distPool.splice(rand(distPool.length), 1)[0]);
+        }
+        q.mcDegrees = [primary, ...pickedDist].sort(() => Math.random() - 0.5);
+        q.mcItems = q.mcDegrees.map((d: HarmonizedDegreeInfo) => ({
+          val: d.chordName,
+          lbl: fmtDegLbl(d),
+        }));
+        q.onChoice = (picked: string) => {
+          const isOk = q.validSet.has(picked);
+          q.tinfo = isOk
+            ? `✓ ${spec.characteristicNote} creates ${primary.roman} (${primary.chordName})`
+            : `Not quite — ${spec.characteristicNote} creates ${primary.roman} (${primary.chordName})`;
+          const chosenDeg = degrees.find(d => d.chordName === picked) || primary;
+          const chordNotes = put(chosenDeg.ints, chosenDeg.pc, 0, tonicZone);
+          audioEngine.resume();
+          const sndPreset = curSound();
+          tonicExp.forEach((m: number, i: number) =>
+            audioEngine.playNote(m, i * 0.025, 0.65, sndPreset, 0.7),
+          );
+          chordNotes.forEach((m: number, i: number) =>
+            audioEngine.playNote(m, 0.55 + i * 0.03, 1.1, sndPreset, 0.78),
+          );
+          return isOk;
+        };
+      } else {
+        q.g = 'mchar_play';
+        q.exp = primaryExp;
+        q.tonicExp = tonicExp;
+        q.acceptedExps = acceptedExps;
+        q.acceptedList = acceptedList;
+      }
+
+      q.refreshLabels = () => {
+        const fmt = $('pfmt').value;
+        const pLbl =
+          fmt == 'roman'
+            ? primary.roman
+            : fmt == 'nns'
+              ? `Nashville ${primary.nashville}`
+              : `${primary.chordName} (${primary.roman})`;
+        q.main = `${C.k} ${getModeDisplayLabel(spec.mode)}`;
+        if (S.studyMode == 'teach') {
+          q.sub = `Characteristic chord: ${pLbl} · Note: ${spec.characteristicNote}`;
+        } else if (S.scMode == 'quiz') {
+          q.sub = `Which chord gives ${getModeDisplayLabel(spec.mode)} its characteristic sound?`;
+          if (q.mcDegrees) {
+            q.mcItems = q.mcDegrees.map((d: HarmonizedDegreeInfo) => ({
+              val: d.chordName,
+              lbl: fmtDegLbl(d),
+            }));
+            $('ans').innerHTML = q.mcItems
+              .map(
+                (item: {val: string; lbl: string}) =>
+                  `<button class=s data-a="${item.val}">${item.lbl}</button>`,
+              )
+              .join('');
+          }
+        } else {
+          q.sub = `Play the characteristic chord · hint: ${spec.characteristicNote}`;
+        }
+      };
+      q.refreshLabels();
+      q.top = `Mode character · ${CL}`;
+      q.topAnon = CL;
+      q.lab = `mode character: ${spec.mode}`;
+      q.ans = `${primary.chordName} (${primary.roman} · ${spec.characteristicNote})`;
+      q.ci = {
+        k: 'harm_mchar',
+        mode: spec.mode,
+        keyName: C.k,
+        characteristicNote: spec.characteristicNote,
+        characteristicChordDegrees: [
+          spec.primaryChordDegree,
+          ...(spec.alternateChordDegrees || []),
+        ],
+        primary,
+        alternates,
+        degrees,
+        summary: spec.summary,
+        cadenceHint: spec.cadenceHint,
+      };
     } else if (g == 'prog' && S.pat) {
       patQ(q);
     } else if (g == 'prog') {
@@ -4946,8 +6168,15 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
       let prevRh: number[] | null = null;
       let prevLh: number[] | null = null;
-      let activeLockRh: [number, number] | null = null;
-      let activeLockLh: [number, number] | null = null;
+      let prevRhF: number[] | null = null;
+      let prevLhF: number[] | null = null;
+      let prevAnchorRh: number | null = null;
+      let prevAnchorLh: number | null = null;
+      let prevDirRh: VLDirection | null = S.vlDir === 'down' ? 'down' : 'up';
+      let prevDirLh: VLDirection | null = S.vlDir === 'down' ? 'down' : 'up';
+      let progDir: VLDirectionSetting = S.vlDir;
+      const bh = curBh();
+
       if (smooth && S.primDeg > 0 && C.sc.length == 7) {
         const anchorChord = buildDiatonicChord(
           C,
@@ -4959,38 +6188,45 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           0,
           0,
         );
-        const anchorVoiced = voice(
-          anchorChord.ints,
-          anchorChord.pc,
-          0,
-          0,
-          undefined,
-          null,
-          true,
-          null,
-          false,
-        );
-        prevRh =
-          anchorVoiced.rhLen > 0
-            ? anchorVoiced.notes.slice(anchorVoiced.lhLen)
-            : null;
-        prevLh =
-          anchorVoiced.lhLen > 0
-            ? anchorVoiced.notes.slice(0, anchorVoiced.lhLen)
-            : null;
+        const aRes = runEngineVoice({
+          ints: anchorChord.ints,
+          pc: anchorChord.pc,
+          cl,
+          bh,
+          rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+          direction: progDir,
+          fixedInv: 0,
+        });
+        prevRh = aRes.rhLen > 0 ? aRes.notes.slice(aRes.lhLen) : null;
+        prevLh = aRes.lhLen > 0 ? aRes.notes.slice(0, aRes.lhLen) : null;
+        prevRhF = aRes.rhF.length ? aRes.rhF : null;
+        prevLhF = aRes.lhF.length ? aRes.lhF : null;
+        prevAnchorRh = aRes.rhOut?.anchorIdx ?? null;
+        prevAnchorLh = aRes.lhOut?.anchorIdx ?? null;
+        prevDirRh = aRes.rhOut?.direction ?? prevDirRh;
+        prevDirLh = aRes.lhOut?.direction ?? prevDirLh;
         if (S.rangeLocked) {
-          activeLockRh = prevRh?.length ? computeLockCorridor(prevRh) : null;
-          activeLockLh = prevLh?.length ? computeLockCorridor(prevLh) : null;
-          S.lockZoneRh = activeLockRh;
-          S.lockZoneLh = activeLockLh;
+          S.lockZoneRh =
+            prevAnchorRh != null && prevRh?.length
+              ? windowMidiCorridor(prevAnchorRh, prevRh.length, vlBoundsForHand('R', cl, bh))
+              : prevRh?.length
+                ? computeLockCorridor(prevRh)
+                : null;
+          S.lockZoneLh =
+            prevAnchorLh != null && prevLh?.length && prevLh.length > 1
+              ? windowMidiCorridor(prevAnchorLh, prevLh.length, vlBoundsForHand('L', cl, bh))
+              : prevLh?.length
+                ? computeLockCorridor(prevLh)
+                : null;
         }
       }
+
       q.ch = P[1].map(([o, sf, bassO], stepIdx) => {
         const x = Q.find(y => y[0] === sf)!;
         const pc = (C.r + o) % 12;
         const mx = Math.min(mi, x[1].length - 1);
         const inv =
-          smooth && stepIdx === 0 && !prevRh
+          smooth && stepIdx === 0 && !prevRh && !prevLh
             ? 0
             : $('exinv').checked
               ? mx
@@ -4999,6 +6235,66 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                 : rand(mx + 1);
         const forceBass = bassO != null ? (C.r + bassO) % 12 : undefined;
         const slashTxt = forceBass != null ? '/' + pn(forceBass) : '';
+
+        if (smooth) {
+          const eRes = runEngineVoice({
+            ints: x[1],
+            pc,
+            cl,
+            bh,
+            rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+            direction: progDir,
+            prevRh,
+            prevRhF,
+            prevAnchorRh,
+            prevDirRh,
+            prevLh,
+            prevLhF,
+            prevAnchorLh,
+            prevDirLh,
+            fixedInv: stepIdx === 0 && !prevRh && !prevLh ? 0 : undefined,
+            forceBass,
+            isSlash: forceBass != null,
+            slashName: forceBass != null ? pn(pc) + sf + slashTxt : undefined,
+          });
+          if (eRes.vlInfo.dirFlipped && progDir !== 'auto') {
+            progDir = eRes.vlInfo.direction;
+          }
+          if (eRes.rhLen > 0) prevRh = eRes.notes.slice(eRes.lhLen);
+          if (eRes.lhLen > 0) prevLh = eRes.notes.slice(0, eRes.lhLen);
+          if (eRes.rhF.length) prevRhF = eRes.rhF;
+          if (eRes.lhF.length) prevLhF = eRes.lhF;
+          if (eRes.rhOut) {
+            prevAnchorRh = eRes.rhOut.anchorIdx;
+            prevDirRh = eRes.rhOut.direction;
+          }
+          if (eRes.lhOut) {
+            prevAnchorLh = eRes.lhOut.anchorIdx;
+            prevDirLh = eRes.lhOut.direction;
+          }
+          if (stepIdx === 0 && S.rangeLocked && !S.lockZoneRh) {
+            if (prevAnchorRh != null && prevRh?.length) {
+              S.lockZoneRh = windowMidiCorridor(prevAnchorRh, prevRh.length, vlBoundsForHand('R', cl, bh));
+            }
+            if (prevAnchorLh != null && prevLh?.length && prevLh.length > 1) {
+              S.lockZoneLh = windowMidiCorridor(prevAnchorLh, prevLh.length, vlBoundsForHand('L', cl, bh));
+            }
+          }
+          return {
+            name: pn(pc) + sf + slashTxt,
+            sf,
+            ints: x[1],
+            pc,
+            forceBass,
+            exp: eRes.notes,
+            hd: eRes.hd,
+            lhLen: eRes.lhLen,
+            rhLen: eRes.rhLen,
+            vlF: eRes.vlF,
+            vlInfo: eRes.vlInfo,
+          };
+        }
+
         const voiced = voice(
           x[1],
           pc,
@@ -5006,24 +6302,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           lhi,
           forceBass,
           prevRh,
-          smooth && bassO == null,
+          false,
           prevLh,
-          smooth,
-          null,
-          null,
-          undefined,
-          undefined,
-          (stepIdx > 0 || prevRh != null) && S.rangeLocked ? activeLockRh : null,
-          (stepIdx > 0 || prevLh != null) && S.rangeLocked ? activeLockLh : null,
+          false,
         );
         if (voiced.rhLen > 0) prevRh = voiced.notes.slice(voiced.lhLen);
         if (voiced.lhLen > 0) prevLh = voiced.notes.slice(0, voiced.lhLen);
-        if (stepIdx === 0 && smooth && S.rangeLocked && !activeLockRh) {
-          if (prevRh?.length) activeLockRh = computeLockCorridor(prevRh);
-          if (prevLh?.length) activeLockLh = computeLockCorridor(prevLh);
-          S.lockZoneRh = activeLockRh;
-          S.lockZoneLh = activeLockLh;
-        }
         return {
           name: pn(pc) + sf + slashTxt,
           sf,
@@ -5331,7 +6615,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       startBeat(q);
     }
 
-    if (q.opts && S.studyMode != 'teach')
+    if (q.mcItems && S.studyMode != 'teach')
+      $('ans').innerHTML = q.mcItems
+        .map(
+          (item: {val: string; lbl: string}) =>
+            `<button class=s data-a="${item.val}">${item.lbl}</button>`,
+        )
+        .join('');
+    else if (q.opts && S.studyMode != 'teach')
       $('ans').innerHTML = q.opts
         .map((o: string) => `<button class=s data-a="${o}">${o}</button>`)
         .join('');
@@ -5340,6 +6631,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     vis();
     stats();
     syncMetronome();
+    if (q.vlInfo?.warning && !$('fb').textContent) {
+      $('fb').style.color = 'var(--ac)';
+      $('fb').textContent = q.vlInfo.warning;
+    }
     if ((g == 'ear' || q.g == 'mel') && S.studyMode != 'teach')
       setTimeout(() => {
         audioEngine.resume();
@@ -5374,14 +6669,21 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     revBtn.classList.toggle('on', !!q?.revealed);
 
     // Fingering is unlocked right away in Teach Mode; in Practice it unlocks when revealed/done
-    const canFing = active && isShown && q.g != 'ear';
+    const canFing = active && isShown && q.g != 'ear' && !q.isMc;
     fgBtn.disabled = !canFing;
     const fOn = $('fing').checked;
     fgBtn.textContent = fOn ? 'Hide fingering' : 'Show fingering';
     fgBtn.classList.toggle('on', canFing && fOn);
 
     plBtn.style.display =
-      isTeach || $('ug').value == 'ear' || q?.g == 'mel' ? '' : 'none';
+      isTeach ||
+      $('ug').value == 'ear' ||
+      q?.g == 'mel' ||
+      q?.g == 'c2s_play' ||
+      q?.g == 'mchar_play' ||
+      q?.isMc
+        ? ''
+        : 'none';
     plBtn.textContent = isTeach ? 'Listen' : 'Play again';
 
     const manualReady = !isTeach && !!(q?.done && advCfg.mode == 'manual');
@@ -5396,6 +6698,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const q = S.q;
     if (!q) {
       $('qtop').textContent = '';
+      applyShiftSideBadges(null);
       syncActionButtons(null);
       return;
     }
@@ -5409,7 +6712,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const nameOk = isTeach || none || p != 'staff' || shown;
     const stf = isTeach
       ? !none
-      : !none && (q.g == 'ear' || q.g == 'mel' ? shown : p != 'symbol' || shown);
+      : !none &&
+        (q.g == 'ear' || q.g == 'mel'
+          ? shown
+          : q.g == 'c2s_play' || q.g == 'mchar_play' || q.isMc
+            ? true
+            : p != 'symbol' || shown);
 
     $('qtop').textContent =
       isTeach || q.g == 'ear' || q.g == 'mel' || nameOk
@@ -5477,6 +6785,69 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         : q.sub;
     $('sub').textContent = baseSub + subMeta + (shown ? ' → ' + q.ans : '');
 
+    const vlMetaEl = $('vlmeta') as HTMLElement | null;
+    if (vlMetaEl) {
+      const mInfo = q.vlInfo;
+      const showVlMeta =
+        !!mInfo &&
+        nameOk &&
+        !$('vlbar')?.hidden;
+      vlMetaEl.hidden = !showVlMeta;
+      if (showVlMeta) {
+        const bits: string[] = [];
+        if (S.rangeLocked) {
+          bits.push(
+            `<span class="vl-meta-item"><strong>Locked window</strong></span>`,
+            `<span class="vl-meta-item"><strong>${mInfo.inversionLabel}</strong></span>`,
+          );
+        } else {
+          const dirArrow = mInfo.direction === 'down' ? '↓' : '↑';
+          const shiftText =
+            mInfo.handShift === 0
+              ? 'shift 0'
+              : `shift ${mInfo.handShift > 0 ? '+' : ''}${mInfo.handShift}`;
+          bits.push(
+            `<span class="vl-meta-item"><strong>${dirArrow} ${mInfo.direction}</strong></span>`,
+            `<span class="vl-meta-item"><strong>${mInfo.inversionLabel}</strong></span>`,
+            `<span class="vl-meta-item ${mInfo.handShift !== 0 ? 'vl-meta-shift' : ''}">${shiftText}</span>`,
+          );
+        }
+        if (mInfo.commonTonesKept > 0) {
+          bits.push(`<span class="vl-meta-item">common ${mInfo.commonTonesKept}</span>`);
+        }
+        if (mInfo.adjusted) {
+          bits.push(`<span class="vl-meta-item vl-meta-adj">adjusted</span>`);
+        }
+        if (mInfo.omittedFifth) {
+          bits.push(`<span class="vl-meta-item vl-meta-adj">5th omitted</span>`);
+        }
+        if (!S.rangeLocked) {
+          bits.push(
+            `<span class="vl-meta-item ${mInfo.shapeChange ? 'vl-meta-shape' : ''}">${mInfo.shapeChange ? 'shape changed' : 'same shape'}</span>`,
+          );
+        }
+        if (mInfo.warning) {
+          bits.push(`<span class="vl-meta-item vl-meta-warn">${mInfo.warning}</span>`);
+        }
+        vlMetaEl.innerHTML = bits.join('<span>·</span>');
+      } else {
+        vlMetaEl.innerHTML = '';
+      }
+    }
+
+    const autoShift =
+      q.vlInfo &&
+      nameOk &&
+      !S.rangeLocked &&
+      !$('vlbar')?.hidden &&
+      q.vlInfo.handShift !== 0
+        ? {
+            tones: Math.abs(q.vlInfo.handShift),
+            dir: (q.vlInfo.handShift > 0 ? 'up' : 'down') as 'up' | 'down',
+          }
+        : null;
+    applyShiftSideBadges(S.shiftManual || autoShift);
+
     if (isTeach) {
       if (q.ch && q.ch.length > 1) {
         const fmt = $('pfmt').value;
@@ -5527,15 +6898,23 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       }
     }
 
-    const sn = q.g == 'int' && !shown ? [q.root] : q.exp;
+    const sn =
+      q.g == 'int' && !shown
+        ? [q.root]
+        : q.g == 'c2s_play' && !shown
+          ? q.chordExp
+          : (q.g == 'mchar_play' || (q.isMc && q.tonicExp)) && !shown
+            ? q.tonicExp
+            : q.exp;
     let fg: any = null,
       fh: any = null;
 
-    const showFingNow = $('fing').checked && shown && q.g != 'ear' && sn === q.exp;
+    const showFingNow =
+      $('fing').checked && shown && q.g != 'ear' && !q.isMc && sn === q.exp;
     if (showFingNow) {
       const D = (q.fgd = q.fgd || fgData(q));
       const i = q.ch ? Math.min(q.pos, D[2].length - 1) : 0;
-      if ((q.g == 'scale' || q.g == 'mel') && !q.steps) {
+      if ((q.g == 'scale' || q.g == 'mel' || q.g == 'c2s_play') && !q.steps) {
         fg = D[2].map((x: any) => x[0]);
         fh = D[1].map((x: any) => x[0]);
       } else if (q.steps) {
@@ -5548,10 +6927,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     }
 
     const staffNotes = q.steps && showFingNow ? q.steps.flat() : sn;
+    const staffSpread =
+      (q.g == 'scale' ||
+        q.g == 'mel' ||
+        (q.g == 'c2s_play' && shown) ||
+        !!q.spread) &&
+      !(q.g == 'c2s_play' && !shown);
     $('stf').innerHTML = stf
       ? staff(
           q.steps ? q.steps.flat() : sn,
-          q.g == 'scale' || q.g == 'mel' || !!q.spread,
+          staffSpread,
           fg,
           fh,
           !!q.steps,
@@ -5562,7 +6947,11 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     S.kbBad = new Set<number>();
     S.hl = new Set<number>();
 
-    const allTargets: number[] = q.steps ? q.steps.flat() : q.exp || [];
+    const allTargets: number[] = q.steps
+      ? q.steps.flat()
+      : q.g == 'harm_c2s' && q.isMc && (d || rev) && q.primarySeq
+        ? q.primarySeq
+        : q.exp || [];
     const targetSet = new Set<number>(allTargets);
 
     const exactKb =
@@ -5576,10 +6965,15 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         if (!S.kbOk.has(m)) S.hl.add(m);
       });
     } else if (d) {
-      if (q.g == 'ear') {
+      if (q.g == 'ear' || q.isMc) {
         allTargets.forEach((m: number) => S.hl.add(m));
-      } else if (q.g == 'scale' || q.g == 'mel') {
-        if (tolExact) {
+      } else if (q.g == 'scale' || q.g == 'mel' || q.g == 'c2s_play') {
+        if (q.g == 'c2s_play' && q.ok) {
+          (q.hit as Set<number>).forEach((m: number) => S.kbOk.add(m));
+          (q.bad as Set<number>).forEach((m: number) => {
+            if (!S.kbOk.has(m)) S.kbBad.add(m);
+          });
+        } else if (tolExact) {
           (q.hit as Set<number>).forEach((m: number) =>
             targetSet.has(m) ? S.kbOk.add(m) : S.kbBad.add(m),
           );
@@ -5635,7 +7029,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       allTargets.forEach((m: number) => S.hl.add(m));
     } else {
       (q.hit as Set<number>)?.forEach((m: number) =>
-        (exactKb ? targetSet.has(m) : true)
+        (exactKb && q.g != 'c2s_play' ? targetSet.has(m) : true)
           ? S.kbOk.add(m)
           : S.kbBad.add(m),
       );
@@ -5667,28 +7061,34 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       ) {
         const playedSorted = [...new Set<number>(q.played)].sort((a, b) => a - b);
         if (playedSorted.length === q.exp.length) {
-          const playedPrevState: {L?: {ns: number[]; f: (number | string)[]}; R?: {ns: number[]; f: (number | string)[]}} = {};
-          if (q.prevLh?.length)
-            playedPrevState.L = {
-              ns: q.prevLh,
-              f: q.prevLhF?.length === q.prevLh.length ? q.prevLhF : chordF(q.prevLh, 'L'),
-            };
-          if (q.prevRh?.length)
-            playedPrevState.R = {
-              ns: q.prevRh,
-              f: q.prevRhF?.length === q.prevRh.length ? q.prevRhF : chordF(q.prevRh, 'R'),
-            };
           const playedHd =
             q.hd && q.hd.length === playedSorted.length ? q.hd : fh;
-          const playedF = fingers(
-            [playedSorted],
-            [playedHd],
-            playedPrevState,
-            q.g != 'int',
-          );
-          notesForBadges = playedSorted;
-          fgForBadges = playedF[0];
-          fhForBadges = playedHd;
+          if (q.playedVlF && q.playedVlF.length === playedSorted.length) {
+            notesForBadges = playedSorted;
+            fgForBadges = q.playedVlF;
+            fhForBadges = playedHd;
+          } else {
+            const playedPrevState: {L?: {ns: number[]; f: (number | string)[]}; R?: {ns: number[]; f: (number | string)[]}} = {};
+            if (q.prevLh?.length)
+              playedPrevState.L = {
+                ns: q.prevLh,
+                f: q.prevLhF?.length === q.prevLh.length ? q.prevLhF : chordF(q.prevLh, 'L'),
+              };
+            if (q.prevRh?.length)
+              playedPrevState.R = {
+                ns: q.prevRh,
+                f: q.prevRhF?.length === q.prevRh.length ? q.prevRhF : chordF(q.prevRh, 'R'),
+              };
+            const playedF = fingers(
+              [playedSorted],
+              [playedHd],
+              playedPrevState,
+              q.g != 'int',
+            );
+            notesForBadges = playedSorted;
+            fgForBadges = playedF[0];
+            fhForBadges = playedHd;
+          }
         }
       }
       notesForBadges.forEach((m: number, idx: number) => {
@@ -6008,7 +7408,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (!q || !q.done || !q.scored) return;
     const base = q.fbBase || '';
     if (advCfg.mode == 'manual') {
-      $('fb').style.color = q.timedOut ? 'var(--bad)' : 'var(--mut)';
+      $('fb').style.color =
+        q.timedOut || (q.isMc && !q.ok)
+          ? 'var(--bad)'
+          : q.isMc && q.ok
+            ? 'var(--ok)'
+            : 'var(--mut)';
       $('fb').textContent = base;
       return;
     }
@@ -6088,6 +7493,24 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         pair.forEach(m =>
           audioEngine.playNote(m, i * 0.28, 0.34, sndPreset, 0.72),
         ),
+      );
+      return;
+    }
+    if (q.chordExp && q.primarySeq) {
+      q.chordExp.forEach((m: number, i: number) =>
+        audioEngine.playNote(m, i * 0.03, 0.85, sndPreset, 0.72),
+      );
+      q.primarySeq.forEach((m: number, i: number) =>
+        audioEngine.playNote(m, 0.72 + i * 0.2, 0.3, sndPreset, 0.74),
+      );
+      return;
+    }
+    if (q.tonicExp && q.exp) {
+      q.tonicExp.forEach((m: number, i: number) =>
+        audioEngine.playNote(m, i * 0.025, 0.65, sndPreset, 0.68),
+      );
+      q.exp.forEach((m: number, i: number) =>
+        audioEngine.playNote(m, 0.62 + i * 0.03, 1.4, sndPreset, 0.76),
       );
       return;
     }
@@ -6172,40 +7595,104 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const nextLh = q.lhLen > 0 ? src.slice(0, q.lhLen) : null;
     const nextRh = q.rhLen > 0 ? src.slice(q.lhLen || 0) : null;
 
-    if (!S.rangeLocked && S.relLocked && S.prevRh?.length && nextRh?.length && allowPlayedAnchor) {
+    const toScaleIdx = getScaleIdxMapper();
+    const playedMatchesExp =
+      src.length === q.exp?.length && src.every((v: number, i: number) => v === q.exp[i]);
+
+    if (!S.rangeLocked && S.relLocked && S.prevRh?.length && nextRh?.length && allowPlayedAnchor && !playedMatchesExp) {
       const prevAvg =
         S.prevRh.reduce((a: number, b: number) => a + b, 0) / S.prevRh.length;
       const newAvg =
         nextRh.reduce((a: number, b: number) => a + b, 0) / nextRh.length;
-      if (Math.abs(newAvg - prevAvg) >= 5) {
+      if (Math.abs(newAvg - prevAvg) >= 4) {
         const {tones, dir} = scaleStepsDelta(prevAvg, newAvg);
         showShiftOverlay(tones, dir);
       }
     }
 
-    const prevLhState =
-      q.prevLh?.length && q.prevLhF?.length === q.prevLh.length
-        ? {ns: q.prevLh, f: q.prevLhF}
-        : q.prevLh?.length
-          ? {ns: q.prevLh, f: chordF(q.prevLh, 'L')}
-          : null;
-    const prevRhState =
-      q.prevRh?.length && q.prevRhF?.length === q.prevRh.length
-        ? {ns: q.prevRh, f: q.prevRhF}
-        : q.prevRh?.length
-          ? {ns: q.prevRh, f: chordF(q.prevRh, 'R')}
+    const cl = S.cl || $('clef').value;
+    const bh = curBh();
+
+    if (playedMatchesExp && q.vlRhF?.length === (nextRh?.length || 0) && q.nextVlAnchorRh !== undefined) {
+      S.prevRhF = nextRh?.length ? [...q.vlRhF] : null;
+      S.prevLhF = nextLh?.length ? [...(q.vlLhF || [])] : null;
+      S.vlAnchorRh = q.nextVlAnchorRh ?? null;
+      S.vlAnchorLh = q.nextVlAnchorLh ?? null;
+      if (q.nextVlDirRh) S.vlPrevDirRh = q.nextVlDirRh;
+      if (q.nextVlDirLh) S.vlPrevDirLh = q.nextVlDirLh;
+      q.playedVlF = q.vlF ? [...q.vlF] : null;
+    } else {
+      const prevLhState =
+        q.prevLh?.length && q.prevLhF?.length === q.prevLh.length
+          ? {ns: q.prevLh, f: q.prevLhF}
+          : q.prevLh?.length
+            ? {ns: q.prevLh, f: chordF(q.prevLh, 'L')}
+            : null;
+      const baseExpLh = q.lhLen > 0 ? q.exp?.slice(0, q.lhLen) || [] : [];
+      const baseExpRh = q.rhLen > 0 ? q.exp?.slice(q.lhLen || 0) || [] : [];
+      const newRhAnchor = nextRh?.length
+        ? q.nextVlAnchorRh != null &&
+          baseExpRh.length === nextRh.length &&
+          nextRh[0] % 12 === baseExpRh[0] % 12
+          ? q.nextVlAnchorRh + (toScaleIdx(nextRh[0]) - toScaleIdx(baseExpRh[0]))
+          : toScaleIdx(nextRh[0])
+        : null;
+      const newLhAnchor =
+        nextLh?.length && nextLh.length > 1
+          ? q.nextVlAnchorLh != null &&
+            baseExpLh.length === nextLh.length &&
+            nextLh[0] % 12 === baseExpLh[0] % 12
+            ? q.nextVlAnchorLh + (toScaleIdx(nextLh[0]) - toScaleIdx(baseExpLh[0]))
+            : toScaleIdx(nextLh[0])
           : null;
 
-    S.prevLhF = nextLh?.length
-      ? nextLh.length === 1
-        ? [bassNoteF(nextLh[0], 'L', prevLhState)]
-        : chordF(nextLh, 'L', q.prevLh || null, q.prevLhF || null)
-      : null;
-    S.prevRhF = nextRh?.length
-      ? nextRh.length === 1
-        ? [bassNoteF(nextRh[0], 'R', prevRhState)]
-        : chordF(nextRh, 'R', q.prevRh || null, q.prevRhF || null)
-      : null;
+      const fRhRes = nextRh?.length
+        ? nextRh.length === 1
+          ? {fingers: [bassNoteF(nextRh[0], 'R', null)], adjusted: false, valid: true}
+          : resolveWindowFingersStrict(
+              nextRh.map((m: number) => toScaleIdx(m) - newRhAnchor!),
+              'R',
+            )
+        : null;
+      const fRh = fRhRes
+        ? fRhRes.valid
+          ? fRhRes.fingers
+          : assignWindowFingers(
+              nextRh!.map((m: number) => toScaleIdx(m) - newRhAnchor!),
+              'R',
+              q.ci?.ints,
+            )
+        : null;
+      const fLhRes = nextLh?.length
+        ? nextLh.length === 1
+          ? {fingers: [bassNoteF(nextLh[0], 'L', prevLhState)], adjusted: false, valid: true}
+          : resolveWindowFingersStrict(
+              nextLh.map((m: number) => toScaleIdx(m) - newLhAnchor!),
+              'L',
+            )
+        : null;
+      const fLh = fLhRes
+        ? fLhRes.valid
+          ? fLhRes.fingers
+          : assignWindowFingers(
+              nextLh!.map((m: number) => toScaleIdx(m) - newLhAnchor!),
+              'L',
+              q.ci?.ints,
+            )
+        : null;
+
+      if (q.vlInfo && fRhRes) {
+        q.vlInfo.adjusted = fRhRes.adjusted || !!fLhRes?.adjusted;
+      }
+      S.prevRhF = fRh;
+      S.prevLhF = fLh;
+      S.vlAnchorRh = newRhAnchor;
+      S.vlAnchorLh = newLhAnchor;
+      if (!S.vlPrevDirRh) S.vlPrevDirRh = S.vlDir === 'down' ? 'down' : 'up';
+      if (!S.vlPrevDirLh) S.vlPrevDirLh = S.vlDir === 'down' ? 'down' : 'up';
+      q.playedVlF = [...(fLh || []), ...(fRh || [])];
+    }
+
     S.prevLh = nextLh;
     S.prevRh = nextRh;
     if (ok) q.relSynced = true;
@@ -6221,8 +7708,18 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             S.prevRh.length
           : null;
       if (S.rangeLocked) {
-        S.lockZoneRh = S.prevRh?.length ? computeLockCorridor(S.prevRh) : null;
-        S.lockZoneLh = S.prevLh?.length ? computeLockCorridor(S.prevLh) : null;
+        S.lockZoneRh =
+          S.vlAnchorRh != null && S.prevRh?.length
+            ? windowMidiCorridor(S.vlAnchorRh, S.prevRh.length, vlBoundsForHand('R', cl, bh))
+            : S.prevRh?.length
+              ? computeLockCorridor(S.prevRh)
+              : null;
+        S.lockZoneLh =
+          S.vlAnchorLh != null && S.prevLh?.length && S.prevLh.length > 1
+            ? windowMidiCorridor(S.vlAnchorLh, S.prevLh.length, vlBoundsForHand('L', cl, bh))
+            : S.prevLh?.length
+              ? computeLockCorridor(S.prevLh)
+              : null;
         syncVlBar();
       }
       S.relLocked = true;
@@ -6276,7 +7773,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     }
 
     q.fbBase = timedOut ? "Time's up" : q.tinfo ? q.tinfo : '';
-    $('fb').style.color = timedOut ? 'var(--bad)' : 'var(--mut)';
+    $('fb').style.color =
+      timedOut || (q.isMc && !ok)
+        ? 'var(--bad)'
+        : q.isMc && ok
+          ? 'var(--ok)'
+          : 'var(--mut)';
     $('fb').textContent = q.fbBase;
 
     render();
@@ -6295,6 +7797,51 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   /* =====================================================================
      23. INPUT: MIDI note on/off + velocity + sustain pedal
      ===================================================================== */
+  function evalC2sNote(q: any, m: number, exact: boolean): {status: 'step' | 'complete' | 'wrong'; matchedName?: string; hintPc?: number} {
+    const prev: number[] = q.c2sNotes || [];
+    const attempt = [...prev, m];
+    const opts = (q.validScaleOpts || []) as {name: string; fullInts: number[]}[];
+    const fits = (cand: {name: string; fullInts: number[]}, notes: number[]) =>
+      notes.length <= cand.fullInts.length &&
+      notes.every((n, j) =>
+        exact
+          ? n === q.primarySeq[0] + cand.fullInts[j]
+          : n % 12 === (q.pc + cand.fullInts[j]) % 12,
+      );
+    const matching = opts.filter(cand => fits(cand, attempt));
+    if (matching.length > 0) {
+      q.c2sNotes = attempt;
+      q.hit.add(m);
+      q.bad.delete(m);
+      const completed = matching.find(c => c.fullInts.length === attempt.length);
+      if (completed) {
+        const others = (q.validNames || []).filter((n: string) => n !== completed.name);
+        q.tinfo = others.length
+          ? `Accepted: ${completed.name} (also valid: ${others.join(', ')})`
+          : `Accepted: ${completed.name}`;
+        return {status: 'complete', matchedName: completed.name};
+      }
+      return {status: 'step'};
+    }
+    q.bad.add(m);
+    const prevFitting = prev.length ? opts.filter(c => fits(c, prev)) : opts;
+    const hintCand = prevFitting[0] || opts[0];
+    const hintInt = hintCand?.fullInts[prev.length] ?? 0;
+    return {status: 'wrong', hintPc: (q.pc + hintInt) % 12};
+  }
+
+  function matchMcharChord(q: any, h: number[], exact: boolean): boolean {
+    const exps: number[][] = q.acceptedExps || [q.exp];
+    if (exact) {
+      return exps.some(ex => match(h, ex));
+    }
+    const hPcs = [...new Set(h.map(x => x % 12))].sort((a, b) => a - b).join();
+    return exps.some(ex => {
+      const exPcs = [...new Set(ex.map(x => x % 12))].sort((a, b) => a - b).join();
+      return hPcs === exPcs;
+    });
+  }
+
   function on(m: number, vel = 96, source: 'midi' | 'pc' = 'midi') {
     if (S.cal) {
       S.cal.push(m);
@@ -6323,7 +7870,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     kb();
 
     const q = S.q;
-    if (!q || q.done || !S.go || q.g == 'ear') {
+    if (!q || q.done || !S.go || q.g == 'ear' || q.isMc) {
       stats();
       return;
     }
@@ -6337,6 +7884,64 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         (q.g == 'prog' && !!q.relProg && !!q.relLocked && q.pos > 0 && !!S.rangeLocked);
       const targetPcs = new Set(targetList.map((x: number) => x % 12));
       const matched = exact ? targetList.includes(m) : targetPcs.has(m % 12);
+
+      if (q.g == 'c2s_play') {
+        const res = evalC2sNote(q, m, $('tol').value == 'exact');
+        if (res.status === 'complete') {
+          q.c2sNotes = [];
+          q.hit.clear();
+          q.bad.clear();
+          render();
+          scheduleLearnAdvance(q, q.tinfo || 'Nice scale!', true);
+        } else if (res.status === 'step') {
+          render();
+        } else {
+          render();
+          scheduleLearnAdvance(
+            q,
+            res.hintPc != null ? `Target note: ${pn(res.hintPc)}` : 'Check scale note',
+            false,
+          );
+        }
+        stats();
+        return;
+      }
+
+      if (q.g == 'mchar_play') {
+        const h = [...S.held].filter((x: number) => !S.ign.has(x));
+        const allAccNotes = (q.acceptedExps || [q.exp]).flat();
+        const isNoteOk = exact
+          ? allAccNotes.includes(m)
+          : allAccNotes.some((x: number) => x % 12 === m % 12);
+        if (isNoteOk) q.hit.add(m);
+        else q.bad.add(m);
+        if (h.length >= q.exp.length) {
+          S.ign = new Set(S.held);
+          const ok = matchMcharChord(q, h, exact);
+          q.played = [...h].sort((a, b) => a - b);
+          q.hit.clear();
+          q.bad.clear();
+          if (ok) {
+            h.forEach(x => q.hit.add(x));
+            scheduleLearnAdvance(q, 'Characteristic chord!', true);
+          } else {
+            const expPcs = new Set(q.exp.map((x: number) => x % 12));
+            h.forEach(x => {
+              const isOk = exact ? q.exp.includes(x) : expPcs.has(x % 12);
+              if (isOk) q.hit.add(x);
+              else q.bad.add(x);
+            });
+            scheduleLearnAdvance(
+              q,
+              `Target: ${q.exp.map((n: number) => sm(n).n).join(' ')}`,
+              false,
+            );
+          }
+        }
+        render();
+        stats();
+        return;
+      }
 
       if (q.g == 'scale' || q.g == 'mel') {
         if (q.steps) {
@@ -6396,6 +8001,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               $('tol').value != 'exact' &&
               q.ch.length > 1
             ) {
+              const cl = S.cl || $('clef').value;
+              const bh = curBh();
+              const toScaleIdx = getScaleIdxMapper();
               const sortedH = [...h].sort((a, b) => a - b);
               const c0 = q.ch[0];
               c0.exp = sortedH;
@@ -6404,48 +8012,61 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                 c0.lhLen > 0 ? sortedH.slice(0, c0.lhLen) : null;
               let pRh: number[] | null =
                 c0.rhLen > 0 ? sortedH.slice(c0.lhLen || 0) : null;
-              const hLhAvg =
-                pLh && pLh.length
-                  ? pLh.reduce((a, b) => a + b, 0) / pLh.length
-                  : null;
-              const hRhAvg =
-                pRh && pRh.length
-                  ? pRh.reduce((a, b) => a + b, 0) / pRh.length
-                  : null;
-              const lockRh: [number, number] | null =
-                S.rangeLocked && pRh?.length ? computeLockCorridor(pRh) : null;
-              const lockLh: [number, number] | null =
-                S.rangeLocked && pLh?.length ? computeLockCorridor(pLh) : null;
+              let aRh: number | null = pRh?.length ? toScaleIdx(pRh[0]) : null;
+              let aLh: number | null = pLh?.length && pLh.length > 1 ? toScaleIdx(pLh[0]) : null;
+              let pRhF: number[] | null = pRh?.length && aRh != null
+                ? assignWindowFingers(pRh.map((m: number) => toScaleIdx(m) - aRh!), 'R', c0.ints)
+                : null;
+              let pLhF: number[] | null = pLh?.length
+                ? pLh.length === 1
+                  ? [bassNoteF(pLh[0], 'L', null)]
+                  : assignWindowFingers(pLh.map((m: number) => toScaleIdx(m) - aLh!), 'L', c0.ints)
+                : null;
+              c0.vlF = [...(pLhF || []), ...(pRhF || [])];
+              let pDirRh: VLDirection = S.vlDir === 'down' ? 'down' : 'up';
+              let pDirLh: VLDirection = S.vlDir === 'down' ? 'down' : 'up';
               if (S.rangeLocked) {
-                S.lockZoneRh = lockRh;
-                S.lockZoneLh = lockLh;
+                S.lockZoneRh = aRh != null && pRh?.length ? windowMidiCorridor(aRh, pRh.length, vlBoundsForHand('R', cl, bh)) : null;
+                S.lockZoneLh = aLh != null && pLh?.length && pLh.length > 1 ? windowMidiCorridor(aLh, pLh.length, vlBoundsForHand('L', cl, bh)) : null;
                 syncVlBar();
               }
               for (let idx = 1; idx < q.ch.length; idx++) {
                 const step = q.ch[idx];
-                const v = voice(
-                  step.ints,
-                  step.pc,
-                  0,
-                  0,
-                  step.forceBass,
-                  pRh,
-                  step.forceBass == null,
-                  pLh,
-                  true,
-                  hRhAvg,
-                  hLhAvg,
-                  undefined,
-                  undefined,
-                  lockRh,
-                  lockLh,
-                );
-                step.exp = v.notes;
-                step.hd = v.hd;
-                step.lhLen = v.lhLen;
-                step.rhLen = v.rhLen;
-                if (v.rhLen > 0) pRh = v.notes.slice(v.lhLen);
-                if (v.lhLen > 0) pLh = v.notes.slice(0, v.lhLen);
+                const eRes = runEngineVoice({
+                  ints: step.ints,
+                  pc: step.pc,
+                  cl,
+                  bh,
+                  rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+                  direction: S.vlDir,
+                  prevRh: pRh,
+                  prevRhF: pRhF,
+                  prevAnchorRh: aRh,
+                  prevDirRh: pDirRh,
+                  prevLh: pLh,
+                  prevLhF: pLhF,
+                  prevAnchorLh: aLh,
+                  prevDirLh: pDirLh,
+                  forceBass: step.forceBass,
+                });
+                step.exp = eRes.notes;
+                step.hd = eRes.hd;
+                step.lhLen = eRes.lhLen;
+                step.rhLen = eRes.rhLen;
+                step.vlF = eRes.vlF;
+                step.vlInfo = eRes.vlInfo;
+                if (eRes.rhLen > 0) pRh = eRes.notes.slice(eRes.lhLen);
+                if (eRes.lhLen > 0) pLh = eRes.notes.slice(0, eRes.lhLen);
+                if (eRes.rhF.length) pRhF = eRes.rhF;
+                if (eRes.lhF.length) pLhF = eRes.lhF;
+                if (eRes.rhOut) {
+                  aRh = eRes.rhOut.anchorIdx;
+                  pDirRh = eRes.rhOut.direction;
+                }
+                if (eRes.lhOut) {
+                  aLh = eRes.lhOut.anchorIdx;
+                  pDirLh = eRes.lhOut.direction;
+                }
               }
               q.relLocked = true;
               q.fgd = null;
@@ -6523,6 +8144,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             $('tol').value != 'exact' &&
             q.ch.length > 1
           ) {
+            const cl = S.cl || $('clef').value;
+            const bh = curBh();
+            const toScaleIdx = getScaleIdxMapper();
             const sortedH = [...h].sort((a, b) => a - b);
             const c0 = q.ch[0];
             c0.exp = sortedH;
@@ -6530,48 +8154,61 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               c0.lhLen > 0 ? sortedH.slice(0, c0.lhLen) : null;
             let pRh: number[] | null =
               c0.rhLen > 0 ? sortedH.slice(c0.lhLen || 0) : null;
-            const hLhAvg =
-              pLh && pLh.length
-                ? pLh.reduce((a, b) => a + b, 0) / pLh.length
-                : null;
-            const hRhAvg =
-              pRh && pRh.length
-                ? pRh.reduce((a, b) => a + b, 0) / pRh.length
-                : null;
-            const lockRh: [number, number] | null =
-              S.rangeLocked && pRh?.length ? computeLockCorridor(pRh) : null;
-            const lockLh: [number, number] | null =
-              S.rangeLocked && pLh?.length ? computeLockCorridor(pLh) : null;
+            let aRh: number | null = pRh?.length ? toScaleIdx(pRh[0]) : null;
+            let aLh: number | null = pLh?.length && pLh.length > 1 ? toScaleIdx(pLh[0]) : null;
+            let pRhF: number[] | null = pRh?.length && aRh != null
+              ? assignWindowFingers(pRh.map((m: number) => toScaleIdx(m) - aRh!), 'R', c0.ints)
+              : null;
+            let pLhF: number[] | null = pLh?.length
+              ? pLh.length === 1
+                ? [bassNoteF(pLh[0], 'L', null)]
+                : assignWindowFingers(pLh.map((m: number) => toScaleIdx(m) - aLh!), 'L', c0.ints)
+              : null;
+            c0.vlF = [...(pLhF || []), ...(pRhF || [])];
+            let pDirRh: VLDirection = S.vlDir === 'down' ? 'down' : 'up';
+            let pDirLh: VLDirection = S.vlDir === 'down' ? 'down' : 'up';
             if (S.rangeLocked) {
-              S.lockZoneRh = lockRh;
-              S.lockZoneLh = lockLh;
+              S.lockZoneRh = aRh != null && pRh?.length ? windowMidiCorridor(aRh, pRh.length, vlBoundsForHand('R', cl, bh)) : null;
+              S.lockZoneLh = aLh != null && pLh?.length && pLh.length > 1 ? windowMidiCorridor(aLh, pLh.length, vlBoundsForHand('L', cl, bh)) : null;
               syncVlBar();
             }
             for (let idx = 1; idx < q.ch.length; idx++) {
               const step = q.ch[idx];
-              const v = voice(
-                step.ints,
-                step.pc,
-                0,
-                0,
-                step.forceBass,
-                pRh,
-                step.forceBass == null,
-                pLh,
-                true,
-                hRhAvg,
-                hLhAvg,
-                undefined,
-                undefined,
-                lockRh,
-                lockLh,
-              );
-              step.exp = v.notes;
-              step.hd = v.hd;
-              step.lhLen = v.lhLen;
-              step.rhLen = v.rhLen;
-              if (v.rhLen > 0) pRh = v.notes.slice(v.lhLen);
-              if (v.lhLen > 0) pLh = v.notes.slice(0, v.lhLen);
+              const eRes = runEngineVoice({
+                ints: step.ints,
+                pc: step.pc,
+                cl,
+                bh,
+                rangeMode: S.rangeLocked ? 'locked' : 'unlocked',
+                direction: S.vlDir,
+                prevRh: pRh,
+                prevRhF: pRhF,
+                prevAnchorRh: aRh,
+                prevDirRh: pDirRh,
+                prevLh: pLh,
+                prevLhF: pLhF,
+                prevAnchorLh: aLh,
+                prevDirLh: pDirLh,
+                forceBass: step.forceBass,
+              });
+              step.exp = eRes.notes;
+              step.hd = eRes.hd;
+              step.lhLen = eRes.lhLen;
+              step.rhLen = eRes.rhLen;
+              step.vlF = eRes.vlF;
+              step.vlInfo = eRes.vlInfo;
+              if (eRes.rhLen > 0) pRh = eRes.notes.slice(eRes.lhLen);
+              if (eRes.lhLen > 0) pLh = eRes.notes.slice(0, eRes.lhLen);
+              if (eRes.rhF.length) pRhF = eRes.rhF;
+              if (eRes.lhF.length) pLhF = eRes.lhF;
+              if (eRes.rhOut) {
+                aRh = eRes.rhOut.anchorIdx;
+                pDirRh = eRes.rhOut.direction;
+              }
+              if (eRes.lhOut) {
+                aLh = eRes.lhOut.anchorIdx;
+                pDirLh = eRes.lhOut.direction;
+              }
             }
             q.relLocked = true;
             q.fgd = null;
@@ -6673,6 +8310,32 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       return;
     }
 
+    if (q.g == 'c2s_play') {
+      const res = evalC2sNote(q, m, $('tol').value == 'exact');
+      if (res.status === 'complete') {
+        fin(q.err == 0);
+        return;
+      }
+      if (res.status === 'wrong') {
+        q.err++;
+        $('fb').textContent = '';
+      }
+      render();
+      stats();
+      return;
+    }
+
+    if (q.g == 'mchar_play') {
+      const h = [...S.held].filter((x: number) => !S.ign.has(x));
+      if (h.length >= q.exp.length) {
+        q.played = [...h].sort((a, b) => a - b);
+        fin(matchMcharChord(q, h, $('tol').value == 'exact'));
+      } else {
+        stats();
+      }
+      return;
+    }
+
     const h = [...S.held].filter((x: number) => !S.ign.has(x));
     if (h.length >= q.exp.length) {
       q.played = [...h].sort((a, b) => a - b);
@@ -6744,6 +8407,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     $('vllock').onclick = (e: MouseEvent) => {
       if (e.detail > 0) (e.currentTarget as HTMLElement).blur();
       S.rangeLocked = !S.rangeLocked;
+      const cl = S.cl || $('clef').value;
+      const bh = curBh();
       if (S.rangeLocked) {
         const rhSrc =
           S.prevRh?.length
@@ -6757,8 +8422,18 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             : S.q?.lhLen > 0 && S.q?.exp?.length
               ? S.q.exp.slice(0, S.q.lhLen)
               : null;
-        S.lockZoneRh = rhSrc?.length ? computeLockCorridor(rhSrc) : null;
-        S.lockZoneLh = lhSrc?.length ? computeLockCorridor(lhSrc) : null;
+        S.lockZoneRh =
+          S.vlAnchorRh != null && rhSrc?.length
+            ? windowMidiCorridor(S.vlAnchorRh, rhSrc.length, vlBoundsForHand('R', cl, bh))
+            : rhSrc?.length
+              ? computeLockCorridor(rhSrc)
+              : null;
+        S.lockZoneLh =
+          S.vlAnchorLh != null && lhSrc?.length && lhSrc.length > 1
+            ? windowMidiCorridor(S.vlAnchorLh, lhSrc.length, vlBoundsForHand('L', cl, bh))
+            : lhSrc?.length
+              ? computeLockCorridor(lhSrc)
+              : null;
       } else {
         S.lockZoneRh = null;
         S.lockZoneLh = null;
@@ -6767,6 +8442,73 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       render();
       vis();
     };
+  }
+  if ($('vldir')) {
+    ($('vldir') as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[data-vldir]')
+      .forEach((btn: HTMLButtonElement) => {
+        btn.onclick = (e: MouseEvent) => {
+          if (e.detail > 0) btn.blur();
+          const dir = btn.dataset.vldir as VLDirectionSetting | undefined;
+          if (!dir || (dir !== 'auto' && dir !== 'up' && dir !== 'down')) return;
+          S.vlDir = dir;
+          S.vlDirManual = true;
+          if (dir !== 'auto') {
+            S.vlPrevDirRh = dir;
+            S.vlPrevDirLh = dir;
+          }
+          syncVlBar();
+          if (S.go) {
+            if (!S.relLocked) resetRelChain();
+            newQ();
+          }
+        };
+      });
+  }
+  if ($('vl7')) {
+    ($('vl7') as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[data-vl7]')
+      .forEach((btn: HTMLButtonElement) => {
+        btn.onclick = (e: MouseEvent) => {
+          if (e.detail > 0) btn.blur();
+          const m = btn.dataset.vl7 as VLSeventhMode | undefined;
+          if (!m || (m !== 'full' && m !== 'omit5' && m !== 'auto')) return;
+          S.vl7Mode = m;
+          syncVlBar();
+          if (S.go) {
+            if (!S.relLocked) resetRelChain();
+            newQ();
+          }
+        };
+      });
+  }
+  if ($('scmode')) {
+    ($('scmode') as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[data-scmode]')
+      .forEach((btn: HTMLButtonElement) => {
+        btn.onclick = (e: MouseEvent) => {
+          if (e.detail > 0) btn.blur();
+          const m = btn.dataset.scmode;
+          if (m !== 'play' && m !== 'quiz') return;
+          S.scMode = m;
+          syncScBar();
+          if (S.go) next();
+        };
+      });
+  }
+  if ($('scdiff')) {
+    ($('scdiff') as HTMLElement)
+      .querySelectorAll<HTMLButtonElement>('[data-scdiff]')
+      .forEach((btn: HTMLButtonElement) => {
+        btn.onclick = (e: MouseEvent) => {
+          if (e.detail > 0) btn.blur();
+          const d = btn.dataset.scdiff;
+          if (d !== 'beginner' && d !== 'advanced') return;
+          S.scDiff = d;
+          syncScBar();
+          if (S.go) next();
+        };
+      });
   }
   if ($('learn2prac')) {
     $('learn2prac').onclick = (e: MouseEvent) => {
@@ -7192,6 +8934,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     vis();
   };
 
+  S.vlDir = ORD() ? 'up' : 'auto';
+  fillModesForScale(true);
   fillFocus();
   vis();
   syncActionButtons(null);
@@ -7228,6 +8972,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     (e: Event) => {
       const target = e.target as HTMLInputElement;
       if (target.id == 'ug') fillFocus();
+      if (target.id == 'scale') fillModesForScale(false);
       if (target.id == 'inmode') S.prefInMode = target.checked;
       if (target.id == 'audioout') {
         try {
@@ -7246,6 +8991,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           'inmode',
           'altchords',
           'key',
+          'scale',
           'mode',
           'bhmode',
           'inv',
@@ -7260,15 +9006,25 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           'clef',
         ].includes(target.id)
       ) {
+        if (target.id == 'order' && !S.vlDirManual) {
+          S.vlDir = ORD() ? 'up' : 'auto';
+        }
         resetRelChain();
       }
 
       vis();
 
-      if (target.id == 'pfmt' && S.q?.ch && S.q.rom) {
-        pset(S.q);
-        render();
-        return;
+      if (target.id == 'pfmt') {
+        if (S.q?.ch && S.q.rom) {
+          pset(S.q);
+          render();
+          return;
+        }
+        if (S.q?.refreshLabels) {
+          S.q.refreshLabels();
+          render();
+          return;
+        }
       }
 
       if (
@@ -7299,7 +9055,28 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const b = (e.target as HTMLElement).closest('button'),
       q = S.q;
     if (b && e.detail > 0) b.blur();
-    if (b && q && q.g == 'ear' && !q.done) fin(b.dataset.a == q.key);
+    if (!b || !q || q.done) return;
+    if (q.g == 'ear') {
+      fin(b.dataset.a == q.key);
+    } else if (q.isMc) {
+      const picked = b.dataset.a || '';
+      const ok = q.onChoice
+        ? !!q.onChoice(picked)
+        : q.validSet
+          ? q.validSet.has(picked)
+          : picked == q.key;
+      b.classList.add(ok ? 'mc-pick-ok' : 'mc-pick-bad');
+      if (!ok && q.validSet) {
+        ($('ans') as HTMLElement)
+          .querySelectorAll<HTMLButtonElement>('[data-a]')
+          .forEach(btn => {
+            if (q.validSet.has(btn.dataset.a || '')) {
+              btn.classList.add('mc-ans-valid');
+            }
+          });
+      }
+      fin(ok);
+    }
   };
 
   $('clef').onchange = $('prompt').onchange = () => {
@@ -7319,7 +9096,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       S.prefInMode = preset.inmode;
     }
     if (preset.key) $('key').value = preset.key;
-    if (preset.mode) $('mode').value = preset.mode;
+    if (preset.mode) {
+      const fam = getScaleFamilyForMode(preset.mode);
+      if ($('scale')) $('scale').value = fam;
+      fillModesForScale(false);
+      $('mode').value = preset.mode;
+    }
     if (preset.clef) $('clef').value = preset.clef;
     if (preset.bhmode) $('bhmode').value = preset.bhmode;
     if (preset.inv != null) $('inv').value = String(preset.inv);
@@ -7349,6 +9131,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (preset.sound) $('sound').value = preset.sound;
     if (preset.prompt) $('prompt').value = preset.prompt;
 
+    if (!S.vlDirManual) S.vlDir = ORD() ? 'up' : 'auto';
     S.go = true;
     resetRelChain();
     vis();
