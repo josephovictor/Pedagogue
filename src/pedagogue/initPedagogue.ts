@@ -3357,207 +3357,29 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (!n) return [];
     if (n == 1) return [h == 'L' ? 5 : 1];
 
-    const vlVoiceCost = (cand: number[]) => {
-      if (!prevNs || !prevF || prevNs.length !== prevF.length) return 0;
-      const handF = h == 'L' ? [...cand].reverse() : cand;
-      let adj = 0;
-      ns.forEach((m, idx) => {
-        const pIdx = prevNs.indexOf(m);
-        if (pIdx >= 0 && prevF[pIdx] === handF[idx]) {
-          adj -= 0.42;
-        }
-      });
-      if (prevNs.length === ns.length) {
-        for (let i = 0; i < n; i++) {
-          const d = Math.abs(ns[i] - prevNs[i]);
-          if (d > 0 && d <= 2) {
-            const fDiff = Math.abs(handF[i] - Number(prevF[i]));
-            if (fDiff === 0) adj -= 0.14;
-            else if (fDiff === 1) adj -= 0.06;
-            else if (fDiff >= 2) adj += 0.22;
-          }
-        }
-      }
-      return adj;
-    };
-
-    if (n == 2) {
-      const sp = ns[1] - ns[0];
-      const orientedNotes = h == 'R' ? ns : [...ns].reverse();
-      const cands: [number, number][] = [
-        [1, 2],
-        [1, 3],
-        [1, 4],
-        [1, 5],
-        [2, 3],
-        [2, 4],
-        [2, 5],
-        [3, 5],
-      ];
-      const ideal2: Record<string, [number, number]> = {
-        '1,2': [1, 4],
-        '1,3': [2, 6],
-        '1,4': [4, 8],
-        '1,5': [6, 12],
-        '2,3': [1, 3],
-        '2,4': [2, 5],
-        '2,5': [4, 8],
-        '3,5': [2, 4],
-      };
-      let bestF: [number, number] = [1, 3];
-      let bestScore = 1e9;
-      for (const cand of cands) {
-        const [lo, hi] = ideal2[`${cand[0]},${cand[1]}`];
-        let score =
-          sp < lo ? (lo - sp) * 1.5 : sp > hi ? (sp - hi) * 2.2 : 0;
-        if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-          score += 0.9;
-        if (cand[0] > 1) score += 0.25;
-        score += vlVoiceCost(cand);
-        if (score < bestScore) {
-          bestScore = score;
-          bestF = cand;
-        }
-      }
-      return h == 'L' ? [...bestF].reverse() : bestF;
-    }
-
-    if (n == 3) {
-      const d1 = ns[1] - ns[0];
-      const d2 = ns[2] - ns[1];
-      // Orient gaps & notes from thumb-side -> pinky-side so both hands share the ergonomic model
-      const g = h == 'R' ? [d1, d2] : [d2, d1];
-      const orientedNotes = h == 'R' ? ns : [...ns].reverse();
-      const cands: [number, number, number][] = [
-        [1, 3, 5],
-        [1, 2, 5],
-        [1, 4, 5],
-        [1, 2, 4],
-        [1, 2, 3],
-        [2, 3, 5],
-        [2, 4, 5],
-      ];
-
-      const pairCost3 = (fA: number, fB: number, gap: number) => {
-        const ideal: Record<string, [number, number]> = {
-          '1,2': [1, 5],
-          '1,3': [3, 6],
-          '1,4': [4, 8],
-          '2,3': [1, 3],
-          '2,4': [2, 5],
-          '2,5': [4, 7],
-          '3,4': [1, 2],
-          // Keep 3-5 inside a major 3rd so 1st-inv RH & 2nd-inv LH triads use 1-2-5 / 5-2-1
-          '3,5': [2, 4],
-          '4,5': [1, 3],
-        };
-        const [lo, hi] = ideal[`${fA},${fB}`] || [1, 4];
-        if (gap < lo) return (lo - gap) * 1.4;
-        if (gap > hi) return (gap - hi) * 2.1;
-        return 0;
-      };
-
-      let bestF: [number, number, number] = [1, 3, 5];
-      let bestScore = 1e9;
-
-      for (const cand of cands) {
-        let score =
-          pairCost3(cand[0], cand[1], g[0]) +
-          pairCost3(cand[1], cand[2], g[1]);
-
-        // Slight default preference on neutral ties
-        if (cand[0] === 1 && cand[1] === 3 && cand[2] === 5) score -= 0.12;
-        if (cand[0] === 1 && cand[1] === 2 && cand[2] === 5) score -= 0.08;
-        if (cand[0] === 1 && cand[1] === 2 && cand[2] === 3 && g[0] <= 2 && g[1] <= 2)
-          score -= 0.3;
-        // Avoid non-thumb base unless thumb would sit on a black key next to a white inner note
-        if (cand[0] > 1) score += 0.35;
-        if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-          score += 1.05;
-        // Prefer 1-2-4 over putting pinky (5) on a black key when inner note is white
-        if (cand[2] === 5 && BK(orientedNotes[2]) && !BK(orientedNotes[1]))
-          score += 0.45;
-
-        score += vlVoiceCost(cand);
-
-        if (score < bestScore) {
-          bestScore = score;
-          bestF = cand;
-        }
-      }
-      return h == 'L' ? [...bestF].reverse() : bestF;
-    }
-
-    if (n == 4) {
-      const d1 = ns[1] - ns[0];
-      const d2 = ns[2] - ns[1];
-      const d3 = ns[3] - ns[2];
-      const span = ns[3] - ns[0];
-      // Orient gaps & notes from thumb-side -> pinky-side so both hands use the same ergonomic model
-      const g = h == 'R' ? [d1, d2, d3] : [d3, d2, d1];
-      const orientedNotes = h == 'R' ? ns : [...ns].reverse();
-      const cands: [number, number, number, number][] = [
-        [1, 2, 3, 5],
-        [1, 2, 4, 5],
-        [1, 3, 4, 5],
-      ];
-      if (span <= 9) {
-        cands.push([1, 2, 3, 4]);
-        cands.push([2, 3, 4, 5]);
-      }
-
-      const pairCost = (fA: number, fB: number, gap: number) => {
-        const ideal: Record<string, [number, number]> = {
-          '1,2': [1, 5],
-          '1,3': [3, 6],
-          '2,3': [1, 4],
-          '2,4': [3, 5],
-          '3,4': [1, 3],
-          '3,5': [3, 4],
-          '4,5': [1, 3],
-        };
-        const [lo, hi] = ideal[`${fA},${fB}`] || [1, 3];
-        if (gap < lo) return (lo - gap) * 1.4;
-        if (gap > hi) return (gap - hi) * 2.1;
-        return 0;
-      };
-
-      let bestF: number[] = [1, 2, 3, 5];
-      let bestScore = 1e9;
-
-      for (const cand of cands) {
-        let score =
-          pairCost(cand[0], cand[1], g[0]) +
-          pairCost(cand[1], cand[2], g[1]) +
-          pairCost(cand[2], cand[3], g[2]);
-        // Slight preference for classic [1, 2, 3, 5] on neutral ties
-        if (cand[0] === 1 && cand[1] === 2 && cand[2] === 3 && cand[3] === 5)
-          score -= 0.12;
-        if (cand[0] > 1) score += 0.35;
-        // Avoid thumb on a black key when adjacent note is white and span fits 2-3-4-5
-        if (cand[0] === 1 && BK(orientedNotes[0]) && !BK(orientedNotes[1]))
-          score += 0.85;
-        // Mildly prefer keeping pinky off a black key if 1-2-3-4 is comfortable
-        if (cand[3] === 5 && BK(orientedNotes[3]) && !BK(orientedNotes[2]))
-          score += 0.35;
-
-        score += vlVoiceCost(cand);
-
-        if (score < bestScore) {
-          bestScore = score;
-          bestF = cand;
-        }
-      }
-      return h == 'L' ? [...bestF].reverse() : bestF;
+    const hand: 'R' | 'L' = h === 'L' ? 'L' : 'R';
+    if (n <= 5) {
+      const prevOpt =
+        prevNs && prevF && prevNs.length === prevF.length && prevNs.length > 0
+          ? {
+              notes: prevNs,
+              primary: prevF.map(
+                v => Number(String(v).split('/')[0]) || (hand === 'L' ? 5 : 1),
+              ),
+            }
+          : null;
+      return computeVoicingFingering(
+        ns,
+        hand,
+        prevOpt,
+        DEFAULT_FINGERING_RULES,
+        S.prefFingering?.[hand] || null,
+      ).primary;
     }
 
     const f: number[] = [];
-    if (n == 5) {
-      f.push(1, 2, 3, 4, 5);
-    } else {
-      while (f.length < n - 4) f.push(1);
-      f.push(2, 3, 4, 5);
-    }
+    while (f.length < n - 4) f.push(1);
+    f.push(2, 3, 4, 5);
     return h == 'L' ? [...f].reverse() : f;
   }
 

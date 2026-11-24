@@ -1371,6 +1371,7 @@ export interface FingeringRulesConfig {
     blackThumbOrPinky: number;
     changedHeldFinger: number;
     fingerDistance: number;
+    handShift: number;
     nonDefaultShape: number;
     stretchComfort: number;
   };
@@ -1378,6 +1379,7 @@ export interface FingeringRulesConfig {
   alternativeThreshold: number;
   maxOuterSpan: Record<string, number>;
   maxPairSpan: Record<string, number>;
+  pairIdealSemi: Record<string, [number, number]>;
   preferredDefaultShapes: Record<number, number[]>;
 }
 
@@ -1387,39 +1389,57 @@ export const DEFAULT_FINGERING_RULES: FingeringRulesConfig = {
     [1, 2, 5],
     [1, 2, 4],
     [1, 3, 4],
+    [1, 4, 5],
+    [2, 3, 5],
+    [2, 4, 5],
+    [2, 3, 4],
+    [1, 2, 3],
   ],
   penalties: {
-    blackThumbOrPinky: 1.1,
-    changedHeldFinger: 2.2,
-    fingerDistance: 0.08,
-    nonDefaultShape: 0.25,
+    blackThumbOrPinky: 1.15,
+    changedHeldFinger: 0.78,
+    fingerDistance: 0.14,
+    handShift: 0.65,
+    nonDefaultShape: 0.24,
     stretchComfort: 0.45,
   },
   preferredBonus: 0.5,
   alternativeThreshold: 0.35,
   maxOuterSpan: {
     '1,5': 12,
-    '1,4': 9,
-    '2,5': 8,
-    '1,3': 6,
-    '2,4': 5,
+    '1,4': 10,
+    '2,5': 9,
+    '1,3': 8,
+    '2,4': 6,
     '3,5': 5,
-    '2,3': 4,
-    '3,4': 3,
-    '4,5': 3,
+    '2,3': 5,
+    '3,4': 4,
+    '4,5': 4,
     '1,2': 6,
   },
   maxPairSpan: {
     '1,2': 6,
-    '1,3': 7,
-    '1,4': 9,
+    '1,3': 8,
+    '1,4': 10,
     '1,5': 12,
-    '2,3': 4,
+    '2,3': 5,
     '2,4': 6,
-    '2,5': 8,
-    '3,4': 3,
+    '2,5': 9,
+    '3,4': 4,
     '3,5': 5,
-    '4,5': 3,
+    '4,5': 4,
+  },
+  pairIdealSemi: {
+    '1,2': [1, 5],
+    '1,3': [3, 5],
+    '1,4': [5, 8],
+    '1,5': [6, 12],
+    '2,3': [1, 4],
+    '2,4': [2, 5],
+    '2,5': [5, 7],
+    '3,4': [1, 3],
+    '3,5': [2, 4],
+    '4,5': [1, 3],
   },
   preferredDefaultShapes: {
     2: [1, 3],
@@ -1867,6 +1887,41 @@ export function generateShapesNearChord(
    CONFIGURABLE ERGONOMIC FINGERING ENGINE WITH ALTERNATIVES
    ===================================================================== */
 
+// Physical horizontal coordinate in white-key widths (natural key centers + recessed black keys)
+const KEY_X_PC = [0, 0.55, 1, 1.45, 2, 3, 3.55, 4, 4.45, 5, 5.45, 6];
+
+export function keyboardKeyX(midi: number): number {
+  const oct = Math.floor(midi / 12) - 1;
+  const pc = ((midi % 12) + 12) % 12;
+  return oct * 7 + KEY_X_PC[pc];
+}
+
+// Natural resting 5-finger keyboard frame relative to thumb (white-key units: e.g. C-D-E-F-G = 0,1,2,3,4)
+const FINGER_REST_X: Record<number, number> = {
+  1: 0,
+  2: 1.0,
+  3: 2.0,
+  4: 3.0,
+  5: 4.0,
+};
+
+function estimateHandFrameX(
+  orientedNotes: number[],
+  thumbToPinkyFingers: number[],
+  hand: 'R' | 'L',
+): number {
+  if (!orientedNotes.length || orientedNotes.length !== thumbToPinkyFingers.length) {
+    return 0;
+  }
+  let sum = 0;
+  for (let i = 0; i < orientedNotes.length; i++) {
+    // Mirror horizontal axis for LH so thumb->pinky increases positively for both hands
+    const x = hand === 'R' ? keyboardKeyX(orientedNotes[i]) : -keyboardKeyX(orientedNotes[i]);
+    sum += x - (FINGER_REST_X[thumbToPinkyFingers[i]] ?? 0);
+  }
+  return sum / orientedNotes.length;
+}
+
 function generateAscending4FingerCombos(): number[][] {
   const res: number[][] = [];
   for (let a = 1; a <= 2; a++) {
@@ -1895,7 +1950,9 @@ function candidateListForSize(
       [2, 3],
       [2, 4],
       [2, 5],
+      [3, 4],
       [3, 5],
+      [4, 5],
     ];
   }
   if (n === 3) return rules.triadCandidates.map(c => [...c]);
@@ -1925,8 +1982,9 @@ function fitsChordSpan(
 }
 
 /**
- * Evaluates right-hand ergonomic fingerings and mirrors for left hand.
- * Always produces sorted ascending `fingers: number[]` (length 1 or 2) per note.
+ * Evaluates anatomical piano fingerings (finger lengths, tendon coupling,
+ * black-key elevation, physical key widths, and whole-hand frame continuity)
+ * oriented from thumb-side -> pinky-side so LH is the exact mirror of RH.
  */
 export function computeVoicingFingering(
   notes: number[],
@@ -1969,6 +2027,26 @@ export function computeVoicingFingering(
       ? [...prev.primary]
       : [...prev.primary].reverse()
     : null;
+  const hasPrev = Boolean(
+    orientedPrevNotes &&
+      orientedPrevPrimary &&
+      orientedPrevNotes.length === orientedPrevPrimary.length &&
+      orientedPrevNotes.length > 0,
+  );
+  const prevFrameX = hasPrev
+    ? estimateHandFrameX(orientedPrevNotes!, orientedPrevPrimary!, hand)
+    : 0;
+  const prevFingerX = new Map<number, number>();
+  if (hasPrev) {
+    for (let i = 0; i < orientedPrevNotes!.length; i++) {
+      prevFingerX.set(
+        orientedPrevPrimary![i],
+        hand === 'R'
+          ? keyboardKeyX(orientedPrevNotes![i])
+          : -keyboardKeyX(orientedPrevNotes![i]),
+      );
+    }
+  }
 
   const rawCands = candidateListForSize(n, rules);
   let legalCands = rawCands.filter(c => fitsChordSpan(c, gaps, totalSpan, rules));
@@ -1976,65 +2054,121 @@ export function computeVoicingFingering(
     legalCands = rawCands;
   }
 
-  // Check whether any legal candidate avoids thumb (1) or pinky (5) on a black key
-  const hasWhiteOuterOption = legalCands.some(cand => {
-    const thumbBad = cand[0] === 1 && isBlackKeyMidi(orientedNotes[0]);
-    const pinkyBad = cand[n - 1] === 5 && isBlackKeyMidi(orientedNotes[n - 1]);
-    return !thumbBad && !pinkyBad;
-  });
-
-  const defShape = rules.preferredDefaultShapes[n];
+  const allBlack = orientedNotes.every(isBlackKeyMidi);
+  const outerIsBlack = (idx: number) => isBlackKeyMidi(orientedNotes[idx]);
 
   const scored = legalCands.map(rhCand => {
     let score = 0;
 
-    // 1. Penalty for thumb or pinky on a black key when a white-key option exists
-    if (hasWhiteOuterOption) {
-      if (rhCand[0] === 1 && isBlackKeyMidi(orientedNotes[0])) {
-        score += rules.penalties.blackThumbOrPinky;
+    // 1. Key-depth & finger-length ergonomics (short thumb 1 & pinky 5 vs long 2/3/4 on black keys)
+    if (rhCand[0] === 1 && outerIsBlack(0)) {
+      if (!isBlackKeyMidi(orientedNotes[1])) {
+        score += rules.penalties.blackThumbOrPinky * 1.1; // strong: use 2 instead of shoving thumb onto black key
+      } else if (!allBlack) {
+        score += rules.penalties.blackThumbOrPinky * 0.35;
+      } else {
+        score += 0.1;
       }
-      if (rhCand[n - 1] === 5 && isBlackKeyMidi(orientedNotes[n - 1])) {
-        score += rules.penalties.blackThumbOrPinky;
+    }
+    if (rhCand[n - 1] === 5 && outerIsBlack(n - 1)) {
+      if (!isBlackKeyMidi(orientedNotes[n - 2])) {
+        score += rules.penalties.blackThumbOrPinky * 0.85; // prefer 4 on black outer key over short pinky 5
+      } else if (!allBlack) {
+        score += rules.penalties.blackThumbOrPinky * 0.25;
+      } else {
+        score += 0.08;
+      }
+    }
+    // Small arch comfort bonus when long inner fingers (2, 3, 4) naturally occupy black keys
+    for (let i = 0; i < n; i++) {
+      const f = rhCand[i];
+      if ((f === 2 || f === 3 || f === 4) && isBlackKeyMidi(orientedNotes[i])) {
+        score -= 0.08;
       }
     }
 
-    // 2 & 3. Previous chord continuity: held note finger preservation + travel distance
-    if (orientedPrevNotes && orientedPrevPrimary && orientedPrevPrimary.length === orientedPrevNotes.length) {
+    // 2. Anatomical finger-pair span comfort (respects thumb abduction, 2-4 ease, 3-4 tendon coupling, 3-5 vs 2-5 stretch)
+    for (let i = 0; i < gaps.length; i++) {
+      const fA = rhCand[i];
+      const fB = rhCand[i + 1];
+      const gap = gaps[i];
+      const pairKey = `${fA},${fB}`;
+      const ideal = rules.pairIdealSemi[pairKey] || [1, 4];
+      if (gap < ideal[0]) {
+        score += (ideal[0] - gap) * 0.4;
+      } else if (gap > ideal[1]) {
+        score += (gap - ideal[1]) * rules.penalties.stretchComfort;
+      }
+      // Mild natural coupling note for 3-4 and 4-5 at minor-3rd limit on white keys
+      if (
+        (pairKey === '3,4' || pairKey === '4,5') &&
+        gap === 3 &&
+        !isBlackKeyMidi(orientedNotes[i]) &&
+        !isBlackKeyMidi(orientedNotes[i + 1])
+      ) {
+        score += 0.09;
+      }
+    }
+    // Outer pair anatomical comfort (for n >= 3 chords, e.g., prevents 1-2-3 stretching across a tritone when 1-2-4 fits naturally)
+    if (n >= 3) {
+      const outerKey = `${rhCand[0]},${rhCand[n - 1]}`;
+      const outerIdeal = rules.pairIdealSemi[outerKey];
+      if (outerIdeal) {
+        if (totalSpan < outerIdeal[0]) {
+          score += (outerIdeal[0] - totalSpan) * 0.35;
+        } else if (totalSpan > outerIdeal[1]) {
+          const over = totalSpan - outerIdeal[1];
+          const weight =
+            outerKey === '1,4' && outerIsBlack(n - 1) && over <= 2
+              ? 0.08
+              : rules.penalties.stretchComfort;
+          score += over * weight;
+        }
+      }
+    }
+
+    // 3. Neutral white-key posture margins (small enough that black-key ergonomics, pair fit, and stationary hand-frame continuity override them)
+    if (!outerIsBlack(0) && rhCand[0] > 1) {
+      score += rules.penalties.nonDefaultShape * 1.75; // ~0.42: anchor thumb on white bottom key unless black key or held-tone hand frame keeps hand still
+    }
+    if (!outerIsBlack(n - 1) && rhCand[n - 1] < 5) {
+      // On compact <= 6 semitone chords (e.g. Bdim), 1-2-4 sits comfortably without stretching; on 7+ semitones, white pinky 5 is more natural unless hand-frame/black-key overrides
+      score += totalSpan <= 6 ? 0.1 : rules.penalties.nonDefaultShape * 1.65;
+    }
+
+    // 4. Relative voice-leading & whole-hand frame continuity from previous chord
+    if (hasPrev) {
+      // (a) Held tones keep the same finger when comfortable
+      let heldCount = 0;
       for (let i = 0; i < n; i++) {
         const m = orientedNotes[i];
-        const prevIdx = orientedPrevNotes.indexOf(m);
+        const prevIdx = orientedPrevNotes!.indexOf(m);
         if (prevIdx >= 0) {
-          if (orientedPrevPrimary[prevIdx] !== rhCand[i]) {
+          heldCount++;
+          if (orientedPrevPrimary![prevIdx] !== rhCand[i]) {
             score += rules.penalties.changedHeldFinger;
           }
-        } else if (i < orientedPrevNotes.length) {
-          const fingerTravel = Math.abs(m - orientedPrevNotes[i]);
-          const fingerNumDelta = Math.abs(rhCand[i] - orientedPrevPrimary[i]);
-          score +=
-            (fingerTravel + fingerNumDelta * 1.5) * rules.penalties.fingerDistance;
         }
       }
-    }
 
-    // 4. Small penalty for shapes outside the default (e.g. 1-3-5 for triads)
-    if (defShape && defShape.length === n) {
-      const matchesDef = rhCand.every((f, idx) => f === defShape[idx]);
-      if (!matchesDef) {
-        score += rules.penalties.nonDefaultShape;
-        // Prefer keeping outer 1 and 5 when deviating on inner fingers
-        if (rhCand[0] !== defShape[0] || rhCand[n - 1] !== defShape[n - 1]) {
-          score += rules.penalties.nonDefaultShape * 1.2;
+      // (b) Whole-hand frame shift: keeps wrist/palm stationary so fingers (like 2 & 4) play nearby keys without shifting the whole hand
+      const candFrameX = estimateHandFrameX(orientedNotes, rhCand, hand);
+      score += Math.abs(candFrameX - prevFrameX) * 0.58;
+
+      // (c) Lateral slide distance for any finger reused from previous chord (when anchored by held tones or leaping)
+      for (let i = 0; i < n; i++) {
+        const f = rhCand[i];
+        const prevX = prevFingerX.get(f);
+        if (prevX !== undefined) {
+          const curX =
+            hand === 'R'
+              ? keyboardKeyX(orientedNotes[i])
+              : -keyboardKeyX(orientedNotes[i]);
+          const dx = Math.abs(curX - prevX);
+          if ((heldCount > 0 && dx > 0.05) || dx > 1.5) {
+            score += dx * rules.penalties.fingerDistance;
+          }
         }
-      }
-    }
-
-    // Mild ergonomic comfort check for 3-4 / 3-5 stretch
-    for (let i = 0; i < gaps.length; i++) {
-      if (rhCand[i] === 3 && rhCand[i + 1] === 4 && gaps[i] >= 3) {
-        score += rules.penalties.stretchComfort;
-      }
-      if (rhCand[i] === 3 && rhCand[i + 1] === 5 && gaps[i] >= 5) {
-        score += rules.penalties.stretchComfort * 0.8;
       }
     }
 

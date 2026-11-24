@@ -238,6 +238,92 @@ function testThreeFamiliesGeneratorNotHardcoded() {
   assert.ok(Object.keys(CHORD_QUALITY_INTERVALS).length > 10);
 }
 
+function testAnatomicalFingeringAndHandFrameContinuity() {
+  // 1. RH 1st inversion triad (E4-G4-C5): 1-2-5 beats 1-3-5 (2-5 comfortably spans the 4th)
+  const rh1st = computeVoicingFingering([64, 67, 72], 'R');
+  assert.deepEqual(rh1st.primary, [1, 2, 5]);
+
+  // 2. LH 2nd inversion triad (G3-C4-E4): 5-2-1 beats 5-3-1 (pinky-side 4th uses 5-2)
+  const lh2nd = computeVoicingFingering([55, 60, 64], 'L');
+  assert.deepEqual(lh2nd.primary, [5, 2, 1]);
+
+  // 3. Finger 4 on top black key (RH) & bottom black key (LH)
+  const rhBb1st = computeVoicingFingering([62, 65, 70], 'R'); // D4-F4-Bb4 -> 1-2-4
+  assert.deepEqual(rhBb1st.primary, [1, 2, 4]);
+  const lhFs1st = computeVoicingFingering([54, 57, 62], 'L'); // F#3-A3-D4 -> 4-2-1
+  assert.deepEqual(lhFs1st.primary, [4, 2, 1]);
+  const lhBbRoot = computeVoicingFingering([46, 50, 53], 'L'); // Bb2-D3-F3 -> 4-2-1
+  assert.deepEqual(lhBbRoot.primary, [4, 2, 1]);
+
+  // 4. Finger 2 avoids thumb on black bottom key (RH) & thumb on black top key (LH)
+  const rhBbRoot = computeVoicingFingering([58, 62, 65], 'R'); // Bb3-D4-F4 -> 2-3-5
+  assert.deepEqual(rhBbRoot.primary, [2, 3, 5]);
+  const rhD1st = computeVoicingFingering([66, 69, 74], 'R'); // F#4-A4-D5 -> 2-3-5
+  assert.deepEqual(rhD1st.primary, [2, 3, 5]);
+  const lhBmRoot = computeVoicingFingering([47, 50, 54], 'L'); // B2-D3-F#3 -> 5-3-2
+  assert.deepEqual(lhBmRoot.primary, [5, 3, 2]);
+
+  // 5. Stationary hand-frame voice leading uses fingers 2 & 4 instead of shifting the whole hand
+  // C4-E4-G4 (1-3-5) -> B3-D4-F4 (Bdim) keeps 2 on D & 4 on F so only thumb steps C->B (1-2-4)
+  const bdimFromCeg = computeVoicingFingering([59, 62, 65], 'R', {
+    notes: [60, 64, 67],
+    primary: [1, 3, 5],
+  });
+  assert.deepEqual(bdimFromCeg.primary, [1, 2, 4]);
+  const cegFromBdim = computeVoicingFingering([60, 64, 67], 'R', {
+    notes: [59, 62, 65],
+    primary: bdimFromCeg.primary,
+  });
+  assert.deepEqual(cegFromBdim.primary, [1, 3, 5]);
+
+  // C4-E4-G4 (1-3-5) -> D4-F4-G4 keeps hand stationary with 2-4-5 and holds G4 on 5
+  const dFgFromCeg = computeVoicingFingering([62, 65, 67], 'R', {
+    notes: [60, 64, 67],
+    primary: [1, 3, 5],
+  });
+  assert.deepEqual(dFgFromCeg.primary, [2, 4, 5]);
+
+  // E4-G4-C5 (1-2-5) -> E4-G4-Bb4 keeps 1 & 2 on E & G and drops onto Bb with finger 4 (1-2-4)
+  const egBbFromEgc = computeVoicingFingering([64, 67, 70], 'R', {
+    notes: [64, 67, 72],
+    primary: [1, 2, 5],
+  });
+  assert.deepEqual(egBbFromEgc.primary, [1, 2, 4]);
+
+  // 6. 4-note 7th chords use finger 4 naturally when outer/adjacent gap fits
+  const rhMaj7_1st = computeVoicingFingering([64, 67, 71, 72], 'R'); // E4-G4-B4-C5 -> 1-2-4-5
+  assert.deepEqual(rhMaj7_1st.primary, [1, 2, 4, 5]);
+  const lhMaj7_3rd = computeVoicingFingering([47, 48, 52, 55], 'L'); // B2-C3-E3-G3 -> 5-4-2-1
+  assert.deepEqual(lhMaj7_3rd.primary, [5, 4, 2, 1]);
+  const rhDom7_root = computeVoicingFingering([60, 64, 67, 70], 'R'); // C4-E4-G4-Bb4 -> 1-2-3-4
+  assert.deepEqual(rhDom7_root.primary, [1, 2, 3, 4]);
+
+  // 7. Recalibrated 4-5 up to major 3rd (4 semitones):
+  // C-E-G (1-3-5) -> C-F-A keeps 1-3-5 primary and offers 1-4-5 as stacked [3, 4] alternative on F
+  const cfaFromCeg = computeVoicingFingering([60, 65, 69], 'R', {
+    notes: [60, 64, 67],
+    primary: [1, 3, 5],
+  });
+  assert.deepEqual(cfaFromCeg.primary, [1, 3, 5]);
+  assert.deepEqual(cfaFromCeg.perNote[1].fingers, [3, 4]);
+  // Selecting 1-4-5 as preferred shape promotes it to primary
+  const cfaPref = computeVoicingFingering(
+    [60, 65, 69],
+    'R',
+    {notes: [60, 64, 67], primary: [1, 3, 5]},
+    DEFAULT_FINGERING_RULES,
+    [1, 4, 5],
+  );
+  assert.deepEqual(cfaPref.primary, [1, 4, 5]);
+  // Black-bottom 2nd-inv minor triad C#4-F#4-A4 uses 2-4-5 instead of thumb on C#
+  const fsm2nd = computeVoicingFingering([61, 66, 69], 'R');
+  assert.deepEqual(fsm2nd.primary, [2, 4, 5]);
+  // 3rd-inv maj7 (B3-C4-E4-G4) offers 1-2-4-5 as [3, 4] alternative alongside 1-2-3-5
+  const cmaj7_3rd = computeVoicingFingering([59, 60, 64, 67], 'R');
+  assert.deepEqual(cmaj7_3rd.primary, [1, 2, 3, 5]);
+  assert.deepEqual(cmaj7_3rd.perNote[2].fingers, [3, 4]);
+}
+
 testCmajorProgressionIiiVI();
 testCEGtoBDG();
 testMinimumCostPropertyAllKeysAndNonDiatonic();
@@ -246,5 +332,6 @@ testRangeSafetyLongUpwardProgression();
 testSettingInteractionRandomOctaveOff();
 testFingeringRulesAndAlternatives();
 testThreeFamiliesGeneratorNotHardcoded();
+testAnatomicalFingeringAndHandFrameContinuity();
 
 console.log('ALL VOICE LEADING & FINGERING ENGINE TESTS PASSED');
