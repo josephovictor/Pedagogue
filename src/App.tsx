@@ -578,6 +578,7 @@ export default function App() {
                 <div id="q">Press Start</div>
                 <div id="sub"></div>
                 <div className="vl-meta" id="vlmeta" hidden></div>
+                <div className="fg-row" id="fgrow" hidden></div>
               </div>
               <div
                 className="q-shift q-shift-right"

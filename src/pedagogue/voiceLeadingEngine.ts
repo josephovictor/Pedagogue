@@ -1314,3 +1314,855 @@ export function computeNextVoiceLedChord(input: VLStepInput): VLStepOutput {
 
   return fullRes;
 }
+
+/* =====================================================================
+   ANCHOR-FREE SEMITONE-COST ENGINE & CONFIGURABLE FINGERING ENGINE
+   ===================================================================== */
+
+export const DEFAULT_VL_RANGE: [number, number] = [48, 84]; // C3 to C6
+
+export interface ChordInput {
+  root: number; // MIDI pitch class 0..11 (also accepts full MIDI; normalized % 12)
+  quality?: string;
+  ints?: number[];
+  name?: string;
+}
+
+export interface NextVoicingOptions {
+  direction?: 'up' | 'down';
+  range?: [number, number];
+  maxSpan?: number;
+}
+
+export interface NextVoicingResult {
+  notes: number[];
+  inversion: number;
+  cost: number;
+  rotated?: 'up' | 'down' | false;
+  voiceMoves?: number[];
+}
+
+export interface FingeringNoteOption {
+  midi: number;
+  fingers: number[]; // sorted ascending, length 1 or 2
+}
+
+export interface FingeringResult {
+  hand: 'R' | 'L';
+  perNote: FingeringNoteOption[];
+  notes: number[];
+  primary: number[];
+  score: number;
+}
+
+export interface ProgStepVoicing {
+  chord: ChordInput;
+  notes: number[];
+  inversion: number;
+  cost: number;
+  rotated: 'up' | 'down' | false;
+  voiceMoves: number[];
+  fingering?: FingeringResult;
+}
+
+export interface FingeringRulesConfig {
+  triadCandidates: number[][];
+  penalties: {
+    blackThumbOrPinky: number;
+    changedHeldFinger: number;
+    fingerDistance: number;
+    nonDefaultShape: number;
+    stretchComfort: number;
+  };
+  preferredBonus: number;
+  alternativeThreshold: number;
+  maxOuterSpan: Record<string, number>;
+  maxPairSpan: Record<string, number>;
+  preferredDefaultShapes: Record<number, number[]>;
+}
+
+export const DEFAULT_FINGERING_RULES: FingeringRulesConfig = {
+  triadCandidates: [
+    [1, 3, 5],
+    [1, 2, 5],
+    [1, 2, 4],
+    [1, 3, 4],
+  ],
+  penalties: {
+    blackThumbOrPinky: 1.1,
+    changedHeldFinger: 2.2,
+    fingerDistance: 0.08,
+    nonDefaultShape: 0.25,
+    stretchComfort: 0.45,
+  },
+  preferredBonus: 0.5,
+  alternativeThreshold: 0.35,
+  maxOuterSpan: {
+    '1,5': 12,
+    '1,4': 9,
+    '2,5': 8,
+    '1,3': 6,
+    '2,4': 5,
+    '3,5': 5,
+    '2,3': 4,
+    '3,4': 3,
+    '4,5': 3,
+    '1,2': 6,
+  },
+  maxPairSpan: {
+    '1,2': 6,
+    '1,3': 7,
+    '1,4': 9,
+    '1,5': 12,
+    '2,3': 4,
+    '2,4': 6,
+    '2,5': 8,
+    '3,4': 3,
+    '3,5': 5,
+    '4,5': 3,
+  },
+  preferredDefaultShapes: {
+    2: [1, 3],
+    3: [1, 3, 5],
+    4: [1, 2, 3, 5],
+    5: [1, 2, 3, 4, 5],
+  },
+};
+
+export const CHORD_QUALITY_INTERVALS: Record<string, number[]> = {
+  '': [0, 4, 7],
+  maj: [0, 4, 7],
+  major: [0, 4, 7],
+  m: [0, 3, 7],
+  min: [0, 3, 7],
+  minor: [0, 3, 7],
+  dim: [0, 3, 6],
+  '°': [0, 3, 6],
+  aug: [0, 4, 8],
+  '+': [0, 4, 8],
+  sus2: [0, 2, 7],
+  sus4: [0, 5, 7],
+  '5': [0, 7],
+  '6': [0, 4, 7, 9],
+  m6: [0, 3, 7, 9],
+  maj7: [0, 4, 7, 11],
+  '7': [0, 4, 7, 10],
+  dom7: [0, 4, 7, 10],
+  m7: [0, 3, 7, 10],
+  min7: [0, 3, 7, 10],
+  'm7b5': [0, 3, 6, 10],
+  'm7♭5': [0, 3, 6, 10],
+  'ø7': [0, 3, 6, 10],
+  dim7: [0, 3, 6, 9],
+  '°7': [0, 3, 6, 9],
+  mMaj7: [0, 3, 7, 11],
+  'maj7#5': [0, 4, 8, 11],
+  'maj7♯5': [0, 4, 8, 11],
+  '7#5': [0, 4, 8, 10],
+  '7♯5': [0, 4, 8, 10],
+  '7b5': [0, 4, 6, 10],
+  '7♭5': [0, 4, 6, 10],
+  '7sus4': [0, 5, 7, 10],
+};
+
+const BLACK_KEY_PCS = new Set([1, 3, 6, 8, 10]);
+
+export function isBlackKeyMidi(midi: number): boolean {
+  return BLACK_KEY_PCS.has(((midi % 12) + 12) % 12);
+}
+
+const NOTE_NAMES_SHARP = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+const PITCH_LETTER_TO_PC: Record<string, number> = {
+  C: 0,
+  D: 2,
+  E: 4,
+  F: 5,
+  G: 7,
+  A: 9,
+  B: 11,
+};
+
+export function parseChordSymbolInput(symbol: string): ChordInput {
+  const m = symbol.trim().match(/^([A-Ga-g])([#♯b♭]?)(.*)$/);
+  if (!m) {
+    return {root: 0, quality: '', ints: [0, 4, 7], name: symbol};
+  }
+  const basePc = PITCH_LETTER_TO_PC[m[1].toUpperCase()] ?? 0;
+  const acc = m[2] === '#' || m[2] === '♯' ? 1 : m[2] === 'b' || m[2] === '♭' ? -1 : 0;
+  const root = (((basePc + acc) % 12) + 12) % 12;
+  const rawQ = m[3].trim();
+  const normQ = rawQ.replace(/♭/g, 'b').replace(/♯/g, '#');
+  const ints =
+    CHORD_QUALITY_INTERVALS[rawQ] ||
+    CHORD_QUALITY_INTERVALS[normQ] ||
+    [0, 4, 7];
+  return {
+    root,
+    quality: rawQ,
+    ints: [...ints],
+    name: symbol.trim(),
+  };
+}
+
+export function resolveChordIntervals(chord: ChordInput): {
+  pc: number;
+  ints: number[];
+} {
+  const pc = ((chord.root % 12) + 12) % 12;
+  if (chord.ints && chord.ints.length) {
+    return {pc, ints: [...chord.ints]};
+  }
+  const q = (chord.quality || '').trim();
+  const normQ = q.replace(/♭/g, 'b').replace(/♯/g, '#');
+  const ints = CHORD_QUALITY_INTERVALS[q] || CHORD_QUALITY_INTERVALS[normQ] || [0, 4, 7];
+  return {pc, ints: [...ints]};
+}
+
+function generateChordCandidatesInRange(
+  ints: number[],
+  pc: number,
+  range: [number, number],
+  maxSpan: number,
+  fixedInversion?: number,
+): {notes: number[]; inversion: number}[] {
+  const seen = new Set<string>();
+  const out: {notes: number[]; inversion: number}[] = [];
+  const rootSpan = Math.max(...ints) - Math.min(...ints);
+  const spanCap = Math.max(maxSpan, rootSpan);
+  const invIndices =
+    fixedInversion != null
+      ? [((fixedInversion % ints.length) + ints.length) % ints.length]
+      : Array.from({length: ints.length}, (_, i) => i);
+
+  for (const inv of invIndices) {
+    for (let oct = -1; oct <= 8; oct++) {
+      const notes = buildVoicingMidi(ints, pc, inv, oct);
+      if (!notes.length) continue;
+      if (notes[0] < range[0] || notes[notes.length - 1] > range[1]) continue;
+      if (notes[notes.length - 1] - notes[0] > spanCap) continue;
+      const key = notes.join(',');
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({notes, inversion: inv});
+      }
+    }
+  }
+  return out;
+}
+
+export function sortedVoiceCost(prevSorted: number[], candSorted: number[]): number {
+  if (!prevSorted.length || !candSorted.length) return 0;
+  if (prevSorted.length === candSorted.length) {
+    let sum = 0;
+    for (let i = 0; i < prevSorted.length; i++) {
+      sum += Math.abs(candSorted[i] - prevSorted[i]);
+    }
+    return sum;
+  }
+  return totalMovement(candSorted, prevSorted);
+}
+
+/**
+ * Rotates a voicing by one octave (up: lowest note + 12, down: highest note - 12),
+ * shifting whole octaves if needed so the output never leaves `range`.
+ */
+export function rotateInversionVoicing(
+  notes: number[],
+  direction: 'up' | 'down',
+  range: [number, number] = DEFAULT_VL_RANGE,
+): number[] {
+  const sorted = [...notes].sort((a, b) => a - b);
+  if (sorted.length < 2) return sorted;
+  let rotated =
+    direction === 'up'
+      ? [...sorted.slice(1), sorted[0] + 12].sort((a, b) => a - b)
+      : [sorted[sorted.length - 1] - 12, ...sorted.slice(0, -1)].sort((a, b) => a - b);
+
+  while (rotated[rotated.length - 1] > range[1] && rotated[0] - 12 >= range[0]) {
+    rotated = rotated.map(n => n - 12);
+  }
+  while (rotated[0] < range[0] && rotated[rotated.length - 1] + 12 <= range[1]) {
+    rotated = rotated.map(n => n + 12);
+  }
+  return rotated;
+}
+
+/**
+ * Anchor-free voice-leading step:
+ * Generates all inversions across every octave placement inside `range`,
+ * chooses the candidate with minimum semitone movement from `previousVoicing`,
+ * tie-breaks by `direction` (or distance to center of range when omitted),
+ * and wraps via octave rotation if an unconstrained choice would leave `range`.
+ */
+export function nextVoicing(
+  previousVoicing: number[],
+  nextChord: ChordInput | string,
+  options: NextVoicingOptions = {},
+): NextVoicingResult {
+  const range: [number, number] = options.range || DEFAULT_VL_RANGE;
+  const maxSpan = options.maxSpan ?? 12;
+  const direction = options.direction;
+  const parsedChord =
+    typeof nextChord === 'string' ? parseChordSymbolInput(nextChord) : nextChord;
+  const {pc, ints} = resolveChordIntervals(parsedChord);
+
+  const prevSorted = [...previousVoicing].sort((a, b) => a - b);
+  const candidates = generateChordCandidatesInRange(ints, pc, range, maxSpan);
+  if (!candidates.length) {
+    const fallback = generateChordCandidatesInRange(ints, pc, [21, 108], Math.max(24, maxSpan));
+    const bestFb = fallback[0] || {notes: buildVoicingMidi(ints, pc, 0, 4), inversion: 0};
+    return {
+      notes: bestFb.notes,
+      inversion: bestFb.inversion,
+      cost: sortedVoiceCost(prevSorted, bestFb.notes),
+      rotated: false,
+      voiceMoves:
+        prevSorted.length === bestFb.notes.length
+          ? bestFb.notes.map((n, i) => n - prevSorted[i])
+          : [],
+    };
+  }
+
+  const rangeCenter = (range[0] + range[1]) / 2;
+  const sumNotes = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
+  const avgNotes = (arr: number[]) => sumNotes(arr) / (arr.length || 1);
+
+  const scoreAndSort = (pool: {notes: number[]; inversion: number}[]) =>
+    pool
+      .map(c => ({
+        ...c,
+        cost: sortedVoiceCost(prevSorted, c.notes),
+        sum: sumNotes(c.notes),
+        centerDist: Math.abs(avgNotes(c.notes) - rangeCenter),
+      }))
+      .sort((a, b) => {
+        if (a.cost !== b.cost) return a.cost - b.cost;
+        if (direction === 'up') {
+          if (a.sum !== b.sum) return b.sum - a.sum;
+        } else if (direction === 'down') {
+          if (a.sum !== b.sum) return a.sum - b.sum;
+        } else if (Math.abs(a.centerDist - b.centerDist) > 1e-6) {
+          return a.centerDist - b.centerDist;
+        }
+        return a.inversion - b.inversion;
+      });
+
+  // Check if unconstrained closest voicing would leave range (for range-wrap reporting)
+  const wideCandidates = generateChordCandidatesInRange(ints, pc, [0, 127], maxSpan);
+  const wideBest = scoreAndSort(wideCandidates)[0];
+  let rotated: 'up' | 'down' | false = false;
+  if (wideBest) {
+    if (wideBest.notes[wideBest.notes.length - 1] > range[1]) rotated = 'down';
+    else if (wideBest.notes[0] < range[0]) rotated = 'up';
+  }
+
+  const best = scoreAndSort(candidates)[0];
+  const voiceMoves =
+    prevSorted.length === best.notes.length
+      ? best.notes.map((n, i) => n - prevSorted[i])
+      : [];
+
+  return {
+    notes: best.notes,
+    inversion: best.inversion,
+    cost: best.cost,
+    rotated,
+    voiceMoves,
+  };
+}
+
+export interface VoiceProgressionOptions {
+  direction?: 'up' | 'down';
+  range?: [number, number];
+  maxSpan?: number;
+  hand?: 'R' | 'L';
+  startNotes?: number[];
+  computeFingering?: boolean;
+  fingeringRules?: FingeringRulesConfig;
+  preferredShape?: number[];
+  rotatePerCycle?: boolean;
+}
+
+export function pickStartVoicing(
+  startChord: ChordInput | string,
+  startInversion = 0,
+  range: [number, number] = DEFAULT_VL_RANGE,
+  maxSpan = 12,
+): {notes: number[]; inversion: number} {
+  const parsed =
+    typeof startChord === 'string' ? parseChordSymbolInput(startChord) : startChord;
+  const {pc, ints} = resolveChordIntervals(parsed);
+  const inv = ((startInversion % ints.length) + ints.length) % ints.length;
+  const center = (range[0] + range[1]) / 2;
+  const cands = generateChordCandidatesInRange(ints, pc, range, maxSpan, inv);
+  if (!cands.length) {
+    const anyCands = generateChordCandidatesInRange(ints, pc, range, maxSpan);
+    if (anyCands.length) {
+      anyCands.sort((a, b) => {
+        const mA = a.notes.reduce((s, n) => s + n, 0) / a.notes.length;
+        const mB = b.notes.reduce((s, n) => s + n, 0) / b.notes.length;
+        return Math.abs(mA - center) - Math.abs(mB - center);
+      });
+      return anyCands[0];
+    }
+    return {notes: buildVoicingMidi(ints, pc, inv, 4), inversion: inv};
+  }
+  cands.sort((a, b) => {
+    const mA = a.notes.reduce((s, n) => s + n, 0) / a.notes.length;
+    const mB = b.notes.reduce((s, n) => s + n, 0) / b.notes.length;
+    return Math.abs(mA - center) - Math.abs(mB - center);
+  });
+  return cands[0];
+}
+
+/**
+ * Anchor-free progression voicer:
+ * Starts on `startChord` in `startInversion` near the center of `range`,
+ * then voices each subsequent chord solely by lowest cost from the previous voicing.
+ */
+export function voiceProgression(
+  startChord: ChordInput | string,
+  startInversion: number,
+  chordSymbols: (ChordInput | string)[],
+  options: VoiceProgressionOptions = {},
+): ProgStepVoicing[] {
+  const range = options.range || DEFAULT_VL_RANGE;
+  const maxSpan = options.maxSpan ?? 12;
+  const hand = options.hand || 'R';
+  const rules = options.fingeringRules || DEFAULT_FINGERING_RULES;
+  const wantFingering = options.computeFingering !== false;
+
+  const firstChord =
+    typeof startChord === 'string' ? parseChordSymbolInput(startChord) : startChord;
+  const start = options.startNotes?.length
+    ? {
+        notes: [...options.startNotes].sort((a, b) => a - b),
+        inversion: identifyInversion(
+          [...options.startNotes].sort((a, b) => a - b),
+          ((firstChord.root % 12) + 12) % 12,
+          resolveChordIntervals(firstChord).ints,
+        ).inversion,
+      }
+    : pickStartVoicing(firstChord, startInversion, range, maxSpan);
+
+  const firstInvIdx =
+    typeof start.inversion === 'number'
+      ? start.inversion
+      : Math.max(0, INV_KEYS.indexOf(start.inversion));
+
+  const out: ProgStepVoicing[] = [];
+  let prevNotes = start.notes;
+  let prevFing: FingeringResult | undefined = wantFingering
+    ? computeVoicingFingering(
+        prevNotes,
+        hand,
+        undefined,
+        rules,
+        options.preferredShape,
+      )
+    : undefined;
+
+  out.push({
+    chord: firstChord,
+    notes: prevNotes,
+    inversion: firstInvIdx,
+    cost: 0,
+    rotated: false,
+    voiceMoves: [],
+    fingering: prevFing,
+  });
+
+  for (const sym of chordSymbols) {
+    const ch = typeof sym === 'string' ? parseChordSymbolInput(sym) : sym;
+    const res = nextVoicing(prevNotes, ch, {
+      direction: options.direction,
+      range,
+      maxSpan,
+    });
+    const fing = wantFingering
+      ? computeVoicingFingering(
+          res.notes,
+          hand,
+          prevFing ? {notes: prevNotes, primary: prevFing.primary} : undefined,
+          rules,
+          options.preferredShape,
+        )
+      : undefined;
+
+    out.push({
+      chord: ch,
+      notes: res.notes,
+      inversion: res.inversion,
+      cost: res.cost,
+      rotated: res.rotated || false,
+      voiceMoves: res.voiceMoves || [],
+      fingering: fing,
+    });
+    prevNotes = res.notes;
+    prevFing = fing;
+  }
+
+  return out;
+}
+
+/* =====================================================================
+   DISPLAY-ONLY TEACHING VIEW: SHAPES NEAR A CHORD (3 INVERSION FAMILIES)
+   ===================================================================== */
+
+export interface FamilyChordShape {
+  degreeIndex: number;
+  chordName: string;
+  notes: number[];
+  inversion: number;
+  cost: number;
+}
+
+export interface AnchorFamilyGroup {
+  familyIndex: number;
+  anchorLabel: string;
+  anchorNotes: number[];
+  shapes: FamilyChordShape[];
+}
+
+export function generateShapesNearChord(
+  anchorChord: ChordInput,
+  scaleRoot: number,
+  scaleIntervals: number[],
+  degreeChordSpecs: {degreeIndex: number; chordName: string; chord: ChordInput}[],
+  range: [number, number] = DEFAULT_VL_RANGE,
+): AnchorFamilyGroup[] {
+  void scaleRoot;
+  void scaleIntervals;
+  const {ints} = resolveChordIntervals(anchorChord);
+  const invCount = Math.min(3, ints.length);
+  const families: AnchorFamilyGroup[] = [];
+
+  for (let inv = 0; inv < invCount; inv++) {
+    const start = pickStartVoicing(anchorChord, inv, range);
+    const anchorLabel = start.notes
+      .map(m => NOTE_NAMES_SHARP[((m % 12) + 12) % 12])
+      .join(' ');
+    const shapes: FamilyChordShape[] = degreeChordSpecs.map(spec => {
+      const res = nextVoicing(start.notes, spec.chord, {range});
+      return {
+        degreeIndex: spec.degreeIndex,
+        chordName: spec.chordName,
+        notes: res.notes,
+        inversion: res.inversion,
+        cost: res.cost,
+      };
+    });
+    families.push({
+      familyIndex: inv,
+      anchorLabel,
+      anchorNotes: start.notes,
+      shapes,
+    });
+  }
+
+  return families;
+}
+
+/* =====================================================================
+   CONFIGURABLE ERGONOMIC FINGERING ENGINE WITH ALTERNATIVES
+   ===================================================================== */
+
+function generateAscending4FingerCombos(): number[][] {
+  const res: number[][] = [];
+  for (let a = 1; a <= 2; a++) {
+    for (let b = a + 1; b <= 3; b++) {
+      for (let c = b + 1; c <= 4; c++) {
+        for (let d = c + 1; d <= 5; d++) {
+          res.push([a, b, c, d]);
+        }
+      }
+    }
+  }
+  return res;
+}
+
+function candidateListForSize(
+  n: number,
+  rules: FingeringRulesConfig,
+): number[][] {
+  if (n <= 1) return [[1]];
+  if (n === 2) {
+    return [
+      [1, 3],
+      [1, 2],
+      [1, 4],
+      [1, 5],
+      [2, 3],
+      [2, 4],
+      [2, 5],
+      [3, 5],
+    ];
+  }
+  if (n === 3) return rules.triadCandidates.map(c => [...c]);
+  if (n === 4) return generateAscending4FingerCombos();
+  if (n === 5) return [[1, 2, 3, 4, 5]];
+  const arr: number[] = [];
+  while (arr.length < n - 4) arr.push(1);
+  arr.push(2, 3, 4, 5);
+  return [arr];
+}
+
+function fitsChordSpan(
+  rhCand: number[],
+  gaps: number[],
+  totalSpan: number,
+  rules: FingeringRulesConfig,
+): boolean {
+  const outerKey = `${rhCand[0]},${rhCand[rhCand.length - 1]}`;
+  const maxOuter = rules.maxOuterSpan[outerKey] ?? 12;
+  if (totalSpan > maxOuter) return false;
+  for (let i = 0; i < gaps.length; i++) {
+    const pairKey = `${rhCand[i]},${rhCand[i + 1]}`;
+    const maxPair = rules.maxPairSpan[pairKey] ?? 12;
+    if (gaps[i] > maxPair) return false;
+  }
+  return true;
+}
+
+/**
+ * Evaluates right-hand ergonomic fingerings and mirrors for left hand.
+ * Always produces sorted ascending `fingers: number[]` (length 1 or 2) per note.
+ */
+export function computeVoicingFingering(
+  notes: number[],
+  hand: 'R' | 'L' = 'R',
+  prev?: {notes: number[]; primary: number[]} | null,
+  rules: FingeringRulesConfig = DEFAULT_FINGERING_RULES,
+  preferredShape?: number[] | null,
+): FingeringResult {
+  const sorted = [...notes].sort((a, b) => a - b);
+  const n = sorted.length;
+  if (!n) {
+    return {hand, perNote: [], notes: [], primary: [], score: 0};
+  }
+  if (n === 1) {
+    const f = hand === 'L' ? 5 : 1;
+    return {
+      hand,
+      perNote: [{midi: sorted[0], fingers: [f]}],
+      notes: sorted,
+      primary: [f],
+      score: 0,
+    };
+  }
+
+  // Orient notes thumb-side -> pinky-side so LH is the exact mirror of RH
+  const orientedNotes = hand === 'R' ? sorted : [...sorted].reverse();
+  const gaps: number[] = [];
+  for (let i = 0; i < orientedNotes.length - 1; i++) {
+    gaps.push(Math.abs(orientedNotes[i + 1] - orientedNotes[i]));
+  }
+  const totalSpan = Math.abs(orientedNotes[n - 1] - orientedNotes[0]);
+
+  const orientedPrevNotes = prev?.notes
+    ? hand === 'R'
+      ? [...prev.notes].sort((a, b) => a - b)
+      : [...prev.notes].sort((a, b) => a - b).reverse()
+    : null;
+  const orientedPrevPrimary = prev?.primary
+    ? hand === 'R'
+      ? [...prev.primary]
+      : [...prev.primary].reverse()
+    : null;
+
+  const rawCands = candidateListForSize(n, rules);
+  let legalCands = rawCands.filter(c => fitsChordSpan(c, gaps, totalSpan, rules));
+  if (!legalCands.length) {
+    legalCands = rawCands;
+  }
+
+  // Check whether any legal candidate avoids thumb (1) or pinky (5) on a black key
+  const hasWhiteOuterOption = legalCands.some(cand => {
+    const thumbBad = cand[0] === 1 && isBlackKeyMidi(orientedNotes[0]);
+    const pinkyBad = cand[n - 1] === 5 && isBlackKeyMidi(orientedNotes[n - 1]);
+    return !thumbBad && !pinkyBad;
+  });
+
+  const defShape = rules.preferredDefaultShapes[n];
+
+  const scored = legalCands.map(rhCand => {
+    let score = 0;
+
+    // 1. Penalty for thumb or pinky on a black key when a white-key option exists
+    if (hasWhiteOuterOption) {
+      if (rhCand[0] === 1 && isBlackKeyMidi(orientedNotes[0])) {
+        score += rules.penalties.blackThumbOrPinky;
+      }
+      if (rhCand[n - 1] === 5 && isBlackKeyMidi(orientedNotes[n - 1])) {
+        score += rules.penalties.blackThumbOrPinky;
+      }
+    }
+
+    // 2 & 3. Previous chord continuity: held note finger preservation + travel distance
+    if (orientedPrevNotes && orientedPrevPrimary && orientedPrevPrimary.length === orientedPrevNotes.length) {
+      for (let i = 0; i < n; i++) {
+        const m = orientedNotes[i];
+        const prevIdx = orientedPrevNotes.indexOf(m);
+        if (prevIdx >= 0) {
+          if (orientedPrevPrimary[prevIdx] !== rhCand[i]) {
+            score += rules.penalties.changedHeldFinger;
+          }
+        } else if (i < orientedPrevNotes.length) {
+          const fingerTravel = Math.abs(m - orientedPrevNotes[i]);
+          const fingerNumDelta = Math.abs(rhCand[i] - orientedPrevPrimary[i]);
+          score +=
+            (fingerTravel + fingerNumDelta * 1.5) * rules.penalties.fingerDistance;
+        }
+      }
+    }
+
+    // 4. Small penalty for shapes outside the default (e.g. 1-3-5 for triads)
+    if (defShape && defShape.length === n) {
+      const matchesDef = rhCand.every((f, idx) => f === defShape[idx]);
+      if (!matchesDef) {
+        score += rules.penalties.nonDefaultShape;
+        // Prefer keeping outer 1 and 5 when deviating on inner fingers
+        if (rhCand[0] !== defShape[0] || rhCand[n - 1] !== defShape[n - 1]) {
+          score += rules.penalties.nonDefaultShape * 1.2;
+        }
+      }
+    }
+
+    // Mild ergonomic comfort check for 3-4 / 3-5 stretch
+    for (let i = 0; i < gaps.length; i++) {
+      if (rhCand[i] === 3 && rhCand[i + 1] === 4 && gaps[i] >= 3) {
+        score += rules.penalties.stretchComfort;
+      }
+      if (rhCand[i] === 3 && rhCand[i + 1] === 5 && gaps[i] >= 5) {
+        score += rules.penalties.stretchComfort * 0.8;
+      }
+    }
+
+    // 5. Remembered user preferred fingering bonus (mirrored for LH comparison)
+    if (preferredShape && preferredShape.length === n) {
+      const orientedPref =
+        hand === 'R' ? preferredShape : [...preferredShape].reverse();
+      if (rhCand.every((f, i) => f === orientedPref[i])) {
+        score -= rules.preferredBonus;
+      }
+    }
+
+    return {rhCand, score};
+  });
+
+  scored.sort((a, b) => a.score - b.score);
+  const best = scored[0];
+  const second = scored[1];
+
+  const primaryOriented = [...best.rhCand];
+  const orientedOptions: number[][] = primaryOriented.map(f => [f]);
+
+  if (second && second.score - best.score <= rules.alternativeThreshold) {
+    const diffIndices: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (best.rhCand[i] !== second.rhCand[i]) diffIndices.push(i);
+    }
+    if (diffIndices.length === 1) {
+      const k = diffIndices[0];
+      const pair = [best.rhCand[k], second.rhCand[k]].sort((a, b) => a - b);
+      orientedOptions[k] = pair;
+    }
+  }
+
+  const finalOptions =
+    hand === 'R' ? orientedOptions : [...orientedOptions].reverse();
+  const finalPrimary =
+    hand === 'R' ? primaryOriented : [...primaryOriented].reverse();
+
+  return {
+    hand,
+    perNote: sorted.map((midi, i) => ({
+      midi,
+      fingers: finalOptions[i].slice(0, 2).sort((a, b) => a - b),
+    })),
+    notes: sorted,
+    primary: finalPrimary,
+    score: best.score,
+  };
+}
+
+export function formatFingeringText(fingering: FingeringResult): string {
+  return fingering.perNote
+    .map(p => (p.fingers.length === 2 ? `(${p.fingers[0]}/${p.fingers[1]})` : String(p.fingers[0])))
+    .join(' ');
+}
+
+export function describeVoiceMovement(
+  prevNotes: number[],
+  nextNotes: number[],
+  noteLabelFn: (midi: number) => string = m =>
+    `${NOTE_NAMES_SHARP[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`,
+): {moves: number[]; summary: string; heldCount: number; totalCost: number} {
+  const a = [...prevNotes].sort((x, y) => x - y);
+  const b = [...nextNotes].sort((x, y) => x - y);
+  if (!a.length || a.length !== b.length) {
+    return {moves: [], summary: '', heldCount: 0, totalCost: sortedVoiceCost(a, b)};
+  }
+  const moves = a.map((m, i) => b[i] - m);
+  let heldCount = 0;
+  let totalCost = 0;
+  const parts = a.map((m, i) => {
+    const d = b[i] - m;
+    totalCost += Math.abs(d);
+    if (d === 0) {
+      heldCount++;
+      return `${noteLabelFn(m)} held (0)`;
+    }
+    const sign = d > 0 ? '+' : '';
+    return `${noteLabelFn(m)}→${noteLabelFn(b[i])} (${sign}${d})`;
+  });
+  return {
+    moves,
+    summary: parts.join(', '),
+    heldCount,
+    totalCost,
+  };
+}
+
+/* =====================================================================
+   SETTING INTERACTION: VOICE LEADING & RANDOM OCTAVE
+   ===================================================================== */
+
+export interface OctaveVLSettingsState {
+  vlead: boolean;
+  randomOctave: boolean;
+  pinnedRange: [number, number];
+  notice: string;
+  warning: string;
+}
+
+export function resolveOctaveVoiceLeadingSettings(
+  prev: {vlead: boolean; randomOctave: boolean},
+  change: {vlead?: boolean; randomOctave?: boolean},
+  range: [number, number] = DEFAULT_VL_RANGE,
+): OctaveVLSettingsState {
+  let vlead = change.vlead !== undefined ? change.vlead : prev.vlead;
+  let randomOctave =
+    change.randomOctave !== undefined ? change.randomOctave : prev.randomOctave;
+  let notice = '';
+  let warning = '';
+
+  if (change.vlead === true) {
+    randomOctave = false;
+    notice = 'Random octaves are turned off while Voice Leading is on (register pinned to C3–C6).';
+  } else if (vlead && change.randomOctave === true) {
+    randomOctave = true;
+    warning = 'Warning: Re-enabling random octaves may jump chords outside the voice-leading register.';
+  } else if (vlead && !randomOctave) {
+    notice = 'Random octaves are turned off while Voice Leading is on (register pinned to C3–C6).';
+  }
+
+  return {
+    vlead,
+    randomOctave,
+    pinnedRange: range,
+    notice,
+    warning,
+  };
+}
+

@@ -2,11 +2,22 @@
 import {audioEngine, type MetronomeFeel, type SoundPreset} from './audioEngine';
 import type {DrillPreset} from './curriculumData';
 import {
+  DEFAULT_FINGERING_RULES,
+  DEFAULT_VL_RANGE,
   assignWindowFingers,
   buildScaleDegreeLookup,
   computeNextVoiceLedChord,
+  computeVoicingFingering,
+  describeVoiceMovement,
+  formatFingeringText,
+  generateShapesNearChord,
+  nextVoicing,
+  pickStartVoicing,
+  resolveOctaveVoiceLeadingSettings,
   resolveWindowFingersStrict,
+  rotateInversionVoicing,
   windowForAnchor,
+  type FingeringResult,
   type VLDirection,
   type VLDirectionSetting,
   type VLInversionKey,
@@ -201,6 +212,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       ['c_plag', 'Plagal cadence (Gospel I–IV–I)', 'B', 'Cadences'],
       ['c_half', 'Half cadence', 'B', 'Cadences'],
       ['h_close', 'Close-range voice leading (triads)', 'B', 'Voice leading'],
+      ['h_vl_up', 'Voice leading: Up the keyboard', 'B', 'Voice leading'],
       ['h_harm7', 'Harmonize a scale (7th chords)', 'I', 'Scales & Chords'],
       ['h_c2s', 'Match scale to chord', 'I', 'Scales & Chords'],
       ['h_mchar', 'Mode character chords', 'I', 'Scales & Chords'],
@@ -211,6 +223,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       ['h_mii', 'Minor ii–V–i', 'I', 'Minor'],
       ['h_guide', 'Guide-tone targeting (3rds & 7ths)', 'I', 'Voice leading'],
       ['h_close7', 'Close-range voice leading (7th chords)', 'I', 'Voice leading'],
+      ['h_vl_down', 'Voice leading: Down the keyboard', 'I', 'Voice leading'],
       ['h_back', 'Backdoor dominant', 'A', 'Substitutions'],
       ['h_dim', 'Diminished passing chords', 'A', 'Substitutions'],
       ['h_all', 'All substitutions mixed', 'A', 'Substitutions'],
@@ -455,11 +468,18 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       1,
     ) +
     swt(
-      'vlead',
-      'Relative voice leading',
-      'Connects chords, harmony & progressions in close range using all chord inversions and dynamic fingering. Locks register from your start chord.',
+      'randoct',
+      'Random octave',
+      'Place chords in random octaves across your keyboard range. Automatically turns off when Voice leading is enabled.',
       'chord,prog,harm',
     ) +
+    swt(
+      'vlead',
+      'Relative voice leading',
+      'Connects chords, harmony & progressions smoothly inside C3–C6 using all chord inversions and ergonomic fingering.',
+      'chord,prog,harm',
+    ) +
+    `<div class="set-note" id="vloctnote" hidden></div>` +
     fld(
       'order',
       'Order',
@@ -549,6 +569,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       'Enabled once Show answer is on; shows Blue (RH) & Orange (LH) badges on staff and keys.',
       ALL,
     ) +
+    fld(
+      'fingcheck',
+      'Fingering validation',
+      [['guidance', 'Guidance only (notes checked)']],
+      'guidance',
+      'chord,prog,harm',
+      1,
+    ) +
     swt(
       'dtl',
       'Details on click',
@@ -572,7 +600,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     ) +
     `<div class=f data-g="${ALL}"><button class=s id=cal type=button>Calibrate: press lowest, then highest key</button><small id=calmsg></small> <b id=rng></b><small class=why></small></div>` +
     `<div hidden>` +
-    `<select id=game>${['chord', 'slash', 'pass', 'scale', 'int', 'prog', 'harm_guide', 'harm_close', 'harm_scale', 'harm_c2s', 'harm_mchar', 'ear'].map(x => `<option>${x}</option>`).join('')}</select>` +
+    `<select id=game>${['chord', 'slash', 'pass', 'scale', 'int', 'prog', 'harm_guide', 'harm_close', 'harm_vl_up', 'harm_vl_down', 'harm_scale', 'harm_c2s', 'harm_mchar', 'ear'].map(x => `<option>${x}</option>`).join('')}</select>` +
     `<select id=size>${R(3, 7).map(x => `<option>${x}</option>`).join('')}</select>` +
     `<select id=pool><option>all</option><option>key</option></select>` +
     `<select id=bass><option>any</option><option>chord</option><option>out</option></select>` +
@@ -628,6 +656,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     homeLhAvg: null as number | null,
     scMode: 'play' as 'play' | 'quiz',
     scDiff: 'beginner' as 'beginner' | 'advanced',
+    prefFingering: {R: null as number[] | null, L: null as number[] | null},
+    famAnchorChord: 'deg:0',
+    vlNotice: '',
+    vlWarn: '',
   };
   let C: any;
 
@@ -766,6 +798,28 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         applyShiftSideBadges(null);
       }
     }, 1800);
+  }
+
+  function syncOctaveVLState(change: {vlead?: boolean; randomOctave?: boolean}) {
+    const vlEl = $('vlead') as HTMLInputElement | null;
+    const roEl = $('randoct') as HTMLInputElement | null;
+    if (!vlEl || !roEl) return;
+    const res = resolveOctaveVoiceLeadingSettings(
+      {vlead: vlEl.checked, randomOctave: roEl.checked},
+      change,
+      DEFAULT_VL_RANGE,
+    );
+    vlEl.checked = res.vlead;
+    roEl.checked = res.randomOctave;
+    S.vlNotice = res.notice;
+    S.vlWarn = res.warning;
+    const noteEl = $('vloctnote') as HTMLElement | null;
+    if (noteEl) {
+      const msg = res.warning || res.notice;
+      noteEl.textContent = msg;
+      noteEl.classList.toggle('warn', !!res.warning);
+      noteEl.hidden = !msg;
+    }
   }
 
   function resetRelChain() {
@@ -1149,11 +1203,24 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     for (let o = -1; o < 9; o++)
       A.push(makeVoicingMidi(ints, pc, inv, o, drop2Base));
 
-    let c = A.filter(a => fit(a, Math.max(S.lo, z[0]), Math.min(S.hi, z[1])));
+    const loB = Math.max(S.lo, z[0]);
+    const hiB = Math.min(S.hi, z[1]);
+    let c = A.filter(a => fit(a, loB, hiB));
     if (!c.length) c = A.filter(a => fit(a, S.lo, S.hi));
-    return c.length
-      ? c[rand(c.length)]
-      : makeVoicingMidi(ints, pc, inv, 4, drop2Base);
+    if (!c.length) return makeVoicingMidi(ints, pc, inv, 4, drop2Base);
+
+    const roEl = $('randoct') as HTMLInputElement | null;
+    const ugVal = $('ug')?.value;
+    if (roEl && !roEl.checked && ugVal && ['chord', 'prog', 'harm'].includes(ugVal)) {
+      const center = (Math.max(loB, DEFAULT_VL_RANGE[0]) + Math.min(hiB, DEFAULT_VL_RANGE[1])) / 2;
+      const sortedC = [...c].sort((a, b) => {
+        const avgA = a.reduce((s, n) => s + n, 0) / a.length;
+        const avgB = b.reduce((s, n) => s + n, 0) / b.length;
+        return Math.abs(avgA - center) - Math.abs(avgB - center);
+      });
+      return sortedC[0];
+    }
+    return c[rand(c.length)];
   }
 
   function scaleStepFrom(midi: number, dir: -1 | 1, sc = C?.sc || [0, 2, 4, 5, 7, 9, 11], root = C?.r ?? 0): number {
@@ -1249,6 +1316,25 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     return [S.lo, S.hi];
   }
 
+  const VL_INV_KEYS: VLInversionKey[] = [
+    'root',
+    '1st',
+    '2nd',
+    '3rd',
+    '4th',
+    '5th',
+    '6th',
+  ];
+  const VL_INV_LABELS = [
+    'Root position',
+    '1st inversion',
+    '2nd inversion',
+    '3rd inversion',
+    '4th inversion',
+    '5th inversion',
+    '6th inversion',
+  ];
+
   interface EngineVoicedResult {
     notes: number[];
     hd: string[];
@@ -1258,7 +1344,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     rhInv: number;
     rhOut: VLStepOutput | null;
     lhOut: VLStepOutput | null;
-    vlF: number[];
+    rhFingering?: FingeringResult | null;
+    lhFingering?: FingeringResult | null;
+    vlF: (number | string)[];
     rhF: number[];
     lhF: number[];
     vlInfo: {
@@ -1271,6 +1359,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       adjusted: boolean;
       omittedFifth: boolean;
       commonTonesKept: number;
+      cost?: number;
+      moveSummary?: string;
+      rotated?: 'up' | 'down' | false;
       notRootPosition?: boolean;
       warning?: string;
     };
@@ -1285,11 +1376,11 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     direction: VLDirectionSetting;
     seventhMode?: VLSeventhMode;
     prevRh?: number[] | null;
-    prevRhF?: number[] | null;
+    prevRhF?: (number | string)[] | null;
     prevAnchorRh?: number | null;
     prevDirRh?: VLDirection | null;
     prevLh?: number[] | null;
-    prevLhF?: number[] | null;
+    prevLhF?: (number | string)[] | null;
     prevAnchorLh?: number | null;
     prevDirLh?: VLDirection | null;
     drop2Base?: number[];
@@ -1324,6 +1415,322 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const scInts = C?.sc || [0, 2, 4, 5, 7, 9, 11];
     const toScaleIdx = getScaleIdxMapper();
 
+    // Unlocked anchor-free semitone-cost engine (pinned to C3-C6 / keyboard bounds)
+    if (rangeMode === 'unlocked' && !drop2Base && !isSlash) {
+      let useInts = [...ints];
+      let omittedFifth = false;
+      if (seventhMode === 'omit5' && useInts.length === 4) {
+        const filtered = useInts.filter(i => i !== 7);
+        if (filtered.length === 3) {
+          useInts = filtered;
+          omittedFifth = true;
+        }
+      }
+
+      const clampRange = (lo: number, hi: number): [number, number] => {
+        const a = Math.max(S.lo, lo);
+        const b = Math.min(S.hi, hi);
+        if (b - a >= 12) return [a, b];
+        return [S.lo, S.hi];
+      };
+
+      const solveUnlockedHand = (
+        hand: 'R' | 'L',
+        range: [number, number],
+        prevNotes: number[] | null | undefined,
+        prevFingers: (number | string)[] | null | undefined,
+        prevAnchor: number | null | undefined,
+        fixedInversion?: number,
+      ) => {
+        const optDir = direction === 'auto' ? undefined : direction;
+        const step =
+          prevNotes && prevNotes.length
+            ? nextVoicing(
+                prevNotes,
+                {root: pc, ints: useInts},
+                {direction: optDir, range, maxSpan: 12},
+              )
+            : {
+                ...pickStartVoicing(
+                  {root: pc, ints: useInts},
+                  fixedInversion ?? 0,
+                  range,
+                  12,
+                ),
+                cost: 0,
+                rotated: false as const,
+                voiceMoves: [] as number[],
+              };
+
+        const prevPrimary =
+          prevFingers && prevNotes && prevFingers.length === prevNotes.length
+            ? prevFingers.map(v => {
+                const first = String(v).split('/')[0];
+                const num = Number(first);
+                return Number.isFinite(num) && num >= 1 && num <= 5 ? num : 1;
+              })
+            : null;
+        const fing = computeVoicingFingering(
+          step.notes,
+          hand,
+          prevNotes && prevPrimary ? {notes: prevNotes, primary: prevPrimary} : null,
+          DEFAULT_FINGERING_RULES,
+          S.prefFingering?.[hand] || null,
+        );
+        const tokens: (number | string)[] = fing.perNote.map(p =>
+          p.fingers.length === 2 ? `${p.fingers[0]}/${p.fingers[1]}` : p.fingers[0],
+        );
+        const anchorIdx = toScaleIdx(step.notes[0]);
+        const handShift = prevAnchor != null ? anchorIdx - prevAnchor : 0;
+        const mv = prevNotes?.length
+          ? describeVoiceMovement(prevNotes, step.notes, smOct)
+          : {moves: [], summary: '', heldCount: 0, totalCost: 0};
+        const invKey = VL_INV_KEYS[step.inversion] || 'root';
+        const invLbl = VL_INV_LABELS[step.inversion] || INV[step.inversion] || 'Voicing';
+        const avgPrev =
+          prevNotes && prevNotes.length
+            ? prevNotes.reduce((a, b) => a + b, 0) / prevNotes.length
+            : null;
+        const avgCur =
+          step.notes.reduce((a, b) => a + b, 0) / (step.notes.length || 1);
+        const outDir: VLDirection =
+          avgPrev != null
+            ? avgCur >= avgPrev
+              ? 'up'
+              : 'down'
+            : direction === 'down'
+              ? 'down'
+              : 'up';
+
+        const prevInv =
+          prevNotes && prevNotes.length === useInts.length ? undefined : undefined;
+        void prevInv;
+
+        const outShim: VLStepOutput = {
+          notes: step.notes,
+          fingers: fing.primary,
+          inversion: invKey,
+          inversionLabel: invLbl,
+          anchorIdx,
+          window: {
+            anchorIdx,
+            winLoIdx: anchorIdx,
+            winHiIdx: anchorIdx + Math.max(0, step.notes.length - 1),
+          },
+          handShift,
+          shapeChange: false,
+          direction: outDir,
+          dirFlipped: false,
+          adjusted: false,
+          omittedFifth,
+          commonTonesKept: mv.heldCount,
+          notRootPosition:
+            (!prevNotes || !prevNotes.length) && step.inversion !== 0,
+        };
+        return {step, fing, tokens, mv, outShim};
+      };
+
+      if (cl === 'bass') {
+        const lhBounds = clampRange(Math.max(S.lo, 36), Math.min(S.hi, 67));
+        const lhRes = solveUnlockedHand(
+          'L',
+          lhBounds,
+          prevLh,
+          prevLhF,
+          prevAnchorLh,
+          fixedInv,
+        );
+        return {
+          notes: lhRes.step.notes,
+          hd: lhRes.step.notes.map(() => 'L'),
+          lhLen: lhRes.step.notes.length,
+          rhLen: 0,
+          lhInv: lhRes.step.inversion,
+          rhInv: lhRes.step.inversion,
+          rhOut: null,
+          lhOut: lhRes.outShim,
+          lhFingering: lhRes.fing,
+          rhFingering: null,
+          vlF: lhRes.tokens,
+          rhF: [],
+          lhF: lhRes.fing.primary,
+          vlInfo: {
+            direction: lhRes.outShim.direction,
+            inversion: lhRes.outShim.inversion,
+            inversionLabel: lhRes.outShim.inversionLabel,
+            handShift: lhRes.outShim.handShift,
+            shapeChange: false,
+            dirFlipped: false,
+            adjusted: false,
+            omittedFifth,
+            commonTonesKept: lhRes.mv.heldCount,
+            cost: lhRes.step.cost,
+            moveSummary: lhRes.mv.summary,
+            rotated: lhRes.step.rotated || false,
+            notRootPosition: lhRes.outShim.notRootPosition,
+          },
+        };
+      }
+
+      const rhLoBound =
+        cl === 'grand' ? (bh === 'bass' ? 48 : 53) : DEFAULT_VL_RANGE[0];
+      const rhBounds = clampRange(rhLoBound, DEFAULT_VL_RANGE[1]);
+      const rhRes = solveUnlockedHand(
+        'R',
+        rhBounds,
+        prevRh,
+        prevRhF,
+        prevAnchorRh,
+        fixedInv,
+      );
+
+      if (cl !== 'grand') {
+        return {
+          notes: rhRes.step.notes,
+          hd: rhRes.step.notes.map(() => 'R'),
+          lhLen: 0,
+          rhLen: rhRes.step.notes.length,
+          lhInv: rhRes.step.inversion,
+          rhInv: rhRes.step.inversion,
+          rhOut: rhRes.outShim,
+          lhOut: null,
+          rhFingering: rhRes.fing,
+          lhFingering: null,
+          vlF: rhRes.tokens,
+          rhF: rhRes.fing.primary,
+          lhF: [],
+          vlInfo: {
+            direction: rhRes.outShim.direction,
+            inversion: rhRes.outShim.inversion,
+            inversionLabel: rhRes.outShim.inversionLabel,
+            handShift: rhRes.outShim.handShift,
+            shapeChange: false,
+            dirFlipped: false,
+            adjusted: false,
+            omittedFifth,
+            commonTonesKept: rhRes.mv.heldCount,
+            cost: rhRes.step.cost,
+            moveSummary: rhRes.mv.summary,
+            rotated: rhRes.step.rotated || false,
+            notRootPosition: rhRes.outShim.notRootPosition,
+          },
+        };
+      }
+
+      if (bh === 'same' || bh === 'diff') {
+        const lhMaxHi = Math.min(S.hi, Math.max(S.lo + 12, rhRes.step.notes[0] - 1));
+        const lhBounds = clampRange(36, lhMaxHi);
+        const lhFixed = bh === 'same' ? rhRes.step.inversion : fixedInv;
+        const lhRes = solveUnlockedHand(
+          'L',
+          lhBounds,
+          prevLh,
+          prevLhF,
+          prevAnchorLh,
+          lhFixed,
+        );
+        return {
+          notes: [...lhRes.step.notes, ...rhRes.step.notes],
+          hd: [
+            ...lhRes.step.notes.map(() => 'L'),
+            ...rhRes.step.notes.map(() => 'R'),
+          ],
+          lhLen: lhRes.step.notes.length,
+          rhLen: rhRes.step.notes.length,
+          lhInv: lhRes.step.inversion,
+          rhInv: rhRes.step.inversion,
+          rhOut: rhRes.outShim,
+          lhOut: lhRes.outShim,
+          rhFingering: rhRes.fing,
+          lhFingering: lhRes.fing,
+          vlF: [...lhRes.tokens, ...rhRes.tokens],
+          rhF: rhRes.fing.primary,
+          lhF: lhRes.fing.primary,
+          vlInfo: {
+            direction: rhRes.outShim.direction,
+            inversion: rhRes.outShim.inversion,
+            inversionLabel: rhRes.outShim.inversionLabel,
+            handShift: rhRes.outShim.handShift,
+            shapeChange: false,
+            dirFlipped: false,
+            adjusted: false,
+            omittedFifth,
+            commonTonesKept: rhRes.mv.heldCount,
+            cost: rhRes.step.cost,
+            moveSummary: rhRes.mv.summary,
+            rotated: rhRes.step.rotated || false,
+            notRootPosition:
+              rhRes.outShim.notRootPosition || lhRes.outShim.notRootPosition,
+          },
+        };
+      }
+
+      // Grand clef, Bass + chord: LH plays closest bass root below RH
+      const bassPc = forceBass ?? pc;
+      const bassLo = Math.max(S.lo, 24);
+      const bassHi = Math.min(S.hi, rhRes.step.notes[0] - 1);
+      const bassCands: number[] = [];
+      for (let o = 0; o <= 7; o++) {
+        const m = 12 * (o + 1) + bassPc;
+        if (m >= bassLo && m <= bassHi) bassCands.push(m);
+      }
+      let bassMidi: number;
+      if (bassCands.length) {
+        const targetBass = prevLh?.length ? prevLh[0] : 42;
+        bassCands.sort((a, b) => Math.abs(a - targetBass) - Math.abs(b - targetBass));
+        bassMidi = bassCands[0];
+      } else {
+        bassMidi = Math.max(S.lo, put([0], bassPc, 0, [Math.max(S.lo, 24), 59])[0]);
+      }
+      const prevBassState =
+        prevLh?.length === 1
+          ? {
+              ns: prevLh,
+              f: prevLhF?.length === 1 ? prevLhF : [5],
+            }
+          : null;
+      const bassF = bassNoteF(bassMidi, 'L', prevBassState);
+      return {
+        notes: [bassMidi, ...rhRes.step.notes],
+        hd: ['L', ...rhRes.step.notes.map(() => 'R')],
+        lhLen: 1,
+        rhLen: rhRes.step.notes.length,
+        lhInv: 0,
+        rhInv: rhRes.step.inversion,
+        rhOut: rhRes.outShim,
+        lhOut: null,
+        rhFingering: rhRes.fing,
+        lhFingering: {
+          hand: 'L',
+          perNote: [{midi: bassMidi, fingers: [bassF]}],
+          notes: [bassMidi],
+          primary: [bassF],
+          score: 0,
+        },
+        vlF: [bassF, ...rhRes.tokens],
+        rhF: rhRes.fing.primary,
+        lhF: [bassF],
+        vlInfo: {
+          direction: rhRes.outShim.direction,
+          inversion: rhRes.outShim.inversion,
+          inversionLabel: rhRes.outShim.inversionLabel,
+          handShift: rhRes.outShim.handShift,
+          shapeChange: false,
+          dirFlipped: false,
+          adjusted: false,
+          omittedFifth,
+          commonTonesKept: rhRes.mv.heldCount,
+          cost: rhRes.step.cost,
+          moveSummary: rhRes.mv.summary,
+          rotated: rhRes.step.rotated || false,
+          notRootPosition: rhRes.outShim.notRootPosition,
+        },
+      };
+    }
+
+    const prevRhNums = prevRhF ? prevRhF.map(x => Number(String(x).split('/')[0]) || 1) : null;
+    const prevLhNums = prevLhF ? prevLhF.map(x => Number(String(x).split('/')[0]) || 1) : null;
+
     if (cl === 'bass') {
       const lhOut = computeNextVoiceLedChord({
         ints,
@@ -1336,7 +1743,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         direction,
         seventhMode,
         prevNotes: prevLh || null,
-        prevFingers: prevLhF || null,
+        prevFingers: prevLhNums,
         prevAnchorIdx: prevAnchorLh ?? null,
         prevDirection: prevDirLh ?? null,
         drop2Base,
@@ -1386,7 +1793,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       direction,
       seventhMode,
       prevNotes: prevRh || null,
-      prevFingers: prevRhF || null,
+      prevFingers: prevRhNums,
       prevAnchorIdx: prevAnchorRh ?? null,
       prevDirection: prevDirRh ?? null,
       drop2Base,
@@ -1440,7 +1847,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         direction,
         seventhMode,
         prevNotes: prevLh || null,
-        prevFingers: prevLhF || null,
+        prevFingers: prevLhNums,
         prevAnchorIdx: prevAnchorLh ?? null,
         prevDirection: prevDirLh ?? null,
         drop2Base,
@@ -3625,6 +4032,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         if (changedFocus && $('bhmode').value == 'bass') {
           set('bhmode', 'same');
         }
+      } else if (f == 'h_vl_up' || f == 'h_vl_down') {
+        g = f == 'h_vl_up' ? 'harm_vl_up' : 'harm_vl_down';
+        S.vlDir = f == 'h_vl_up' ? 'up' : 'down';
       } else if (f == 'h_harm3' || f == 'h_harm7') {
         g = 'harm_scale';
         set('size', f == 'h_harm7' ? 4 : 3);
@@ -3858,9 +4268,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         } else if (ug == 'harm' && g == 'harm_guide') {
           on = false;
           why = 'Guide-tone targeting always uses smooth voice leading';
-        } else if (g == 'harm_close') {
+        } else if (g == 'harm_close' || g == 'harm_vl_up' || g == 'harm_vl_down') {
           on = false;
-          why = 'Always active in close-range voice-leading drills';
+          why = 'Always active in close-range and keyboard voice-leading drills';
         } else if (g == 'harm_c2s' || g == 'harm_mchar') {
           on = false;
           why = 'Used in chord and progression voicing drills';
@@ -3874,7 +4284,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         } else if (g == 'harm_c2s' || g == 'harm_mchar') {
           on = false;
           why = 'Inversions are fixed in this drill';
-        } else if (relActive) {
+        } else if (relActive || g == 'harm_vl_up' || g == 'harm_vl_down') {
           on = false;
           why = 'Disabled while Relative voice leading is on';
         }
@@ -3907,6 +4317,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       );
       f.querySelector('.why').textContent = why;
     });
+    const vlNoteEl = $('vloctnote') as HTMLElement | null;
+    if (vlNoteEl) {
+      const showVlNote =
+        ['chord', 'prog', 'harm'].includes(ug) &&
+        !relUnsupported &&
+        Boolean(S.vlWarn || S.vlNotice);
+      vlNoteEl.hidden = !showVlNote;
+    }
     $('pl').style.display =
       S.studyMode == 'teach' ||
       ug == 'ear' ||
@@ -4045,6 +4463,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     'bhmode',
     'inv',
     'lhinv',
+    'fingcheck',
     'schands',
     'sound',
     'feel',
@@ -4698,7 +5117,19 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   function teachGuideHTML(q: any) {
     if (S.studyMode != 'teach' || !q) return '';
     const bits: string[] = [];
-    if (q.fgd) {
+    const activeItem = q.ch ? q.ch[q.pos] : q;
+    if (activeItem?.vlFingeringRh || activeItem?.vlFingeringLh) {
+      const fParts: string[] = [];
+      if (activeItem.vlFingeringLh) {
+        fParts.push(`LH ${formatFingeringText(activeItem.vlFingeringLh)}`);
+      }
+      if (activeItem.vlFingeringRh) {
+        fParts.push(`RH ${formatFingeringText(activeItem.vlFingeringRh)}`);
+      }
+      if (fParts.length) {
+        bits.push(row('Suggested fingering', fParts.join(' · ')));
+      }
+    } else if (q.fgd) {
       const D = q.fgd;
       const idx = q.ch ? Math.min(q.pos, D[2].length - 1) : 0;
       const fArr = ((q.g == 'scale' || q.g == 'mel') && !q.steps)
@@ -4714,12 +5145,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       if (fArr?.length && hArr?.length && !q.steps && q.g != 'scale' && q.g != 'mel') {
         const lhF = fArr.filter((_: any, i: number) => hArr[i] == 'L');
         const rhF = fArr.filter((_: any, i: number) => hArr[i] == 'R');
+        const fmtSingle = (v: number | string) =>
+          String(v).includes('/') ? `(${v})` : String(v);
         const fmtF =
           lhF.length && rhF.length
-            ? `LH ${lhF.join('–')} · RH ${rhF.join('–')}`
+            ? `LH ${lhF.map(fmtSingle).join(' ')} · RH ${rhF.map(fmtSingle).join(' ')}`
             : lhF.length
-              ? `LH ${lhF.join('–')}`
-              : `RH ${rhF.join('–')}`;
+              ? `LH ${lhF.map(fmtSingle).join(' ')}`
+              : `RH ${rhF.map(fmtSingle).join(' ')}`;
         bits.push(row('Suggested fingering', fmtF));
       }
     }
@@ -4789,6 +5222,78 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             `</div>`
           );
         })
+        .join('') +
+      `</div>`
+    );
+  }
+
+  function shapesNearTonicHTML(q: any) {
+    if (!C?.sc || C.sc.length < 7) return '';
+    const degrees = harmonizeScaleDegrees(C.sc, 3, C.r, C.names);
+    if (!degrees.length) return '';
+
+    const specs = degrees.map(d => ({
+      degreeIndex: d.degree,
+      chordName: `${d.roman} · ${d.chordName}`,
+      chord: {root: d.pc, ints: d.ints, name: d.chordName},
+    }));
+
+    const options: {val: string; label: string; chord: {root: number; ints: number[]; name: string}}[] = degrees.map(
+      d => ({
+        val: `deg:${d.degree}`,
+        label: `${d.roman} (${d.chordName})`,
+        chord: {root: d.pc, ints: d.ints, name: d.chordName},
+      }),
+    );
+
+    if (q?.ci?.k === 'chord' && q.ci.pc != null && q.ci.ints?.length) {
+      options.unshift({
+        val: 'current',
+        label: `Current: ${q.ci.n}`,
+        chord: {root: q.ci.pc, ints: q.ci.ints, name: q.ci.n},
+      });
+    }
+
+    const sel =
+      options.find(o => o.val === S.famAnchorChord) ||
+      options.find(o => o.val === 'deg:0') ||
+      options[0];
+    const families = generateShapesNearChord(
+      sel.chord,
+      C.r,
+      C.sc,
+      specs,
+      DEFAULT_VL_RANGE,
+    );
+
+    return (
+      `<div class="fam-box">` +
+      `<div class="fam-head">` +
+      `<h5>Shapes near ${sel.chord.name}</h5>` +
+      `<select id="famAnchor" class="fam-select" aria-label="Re-anchor families on chord">` +
+      options
+        .map(
+          o =>
+            `<option value="${o.val}"${o.val === sel.val ? ' selected' : ''}>Anchor: ${o.label}</option>`,
+        )
+        .join('') +
+      `</select>` +
+      `</div>` +
+      families
+        .map(
+          fam =>
+            `<div class="fam-group">` +
+            `<div class="fam-anchor-title">Near ${fam.anchorLabel}</div>` +
+            `<div class="fam-grid">` +
+            fam.shapes
+              .map(
+                sh =>
+                  `<button type="button" class="fam-chip" data-notes="${sh.notes.join(',')}" title="Click to hear and highlight">${`<strong>${sh.chordName}</strong><span>${sh.notes.map(m => sm(m).n).join(' ')}</span>`}</button>`,
+              )
+              .join('') +
+            `</div>` +
+            `</div>`,
+        )
         .join('') +
       `</div>`
     );
@@ -4870,7 +5375,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         row('Key', C.k) +
         listInfo(q);
     }
-    return base + teachGuideHTML(q);
+    const famView = ['chord', 'prog', 'harm_scale'].includes(c.k)
+      ? shapesNearTonicHTML(q)
+      : '';
+    return base + famView + teachGuideHTML(q);
   }
 
   function fillInfo() {
@@ -5278,6 +5786,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           q.vlF = engRes.vlF;
           q.vlRhF = engRes.rhF;
           q.vlLhF = engRes.lhF;
+          q.vlFingeringRh = engRes.rhFingering || null;
+          q.vlFingeringLh = engRes.lhFingering || null;
           q.vlInfo = engRes.vlInfo;
           q.nextVlAnchorRh = engRes.rhOut?.anchorIdx ?? null;
           q.nextVlAnchorLh = engRes.lhOut?.anchorIdx ?? null;
@@ -5622,6 +6132,250 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       q.ci = {k: 'prog'};
       q.ans = `${c1.name} → ${c2.name} (${targetInvText}${motion ? ' · ' + motion : ''})`;
       pset(q);
+    } else if (g == 'harm_vl_up' || g == 'harm_vl_down') {
+      // Up / Down the keyboard voice-leading drill across 3 inversion-rotating cycles
+      q.g = 'prog';
+      const dir: 'up' | 'down' = g === 'harm_vl_up' ? 'up' : 'down';
+      const bh = curBh();
+      const tolExact = $('tol').value == 'exact';
+      const degrees = harmonizeScaleDegrees(C.sc, 3, C.r, C.names);
+      const templates: number[][] =
+        C.sc.length >= 7
+          ? [
+              [0, 3, 4, 0],
+              [1, 4, 0],
+              [0, 5, 3, 4],
+              [0, 4, 5, 3],
+            ]
+          : [[0, 1, 2, 0]];
+      const pat = ORD()
+        ? templates[S.n % templates.length]
+        : templates[rand(templates.length)];
+      const cycles = 3;
+      const roms: string[] = [];
+      const nnss: string[] = [];
+      const chList: any[] = [];
+
+      const safeClamp = (lo: number, hi: number): [number, number] => {
+        const a = Math.max(S.lo, lo);
+        const b = Math.min(S.hi, hi);
+        return b - a >= 12 ? [a, b] : [S.lo, S.hi];
+      };
+      const handIsLhOnly = cl === 'bass';
+      const rhRange = safeClamp(
+        cl === 'grand' ? (bh === 'bass' ? 48 : 53) : DEFAULT_VL_RANGE[0],
+        DEFAULT_VL_RANGE[1],
+      );
+      const lhRange = safeClamp(36, handIsLhOnly ? 67 : 60);
+
+      let prevRh: number[] | null = null;
+      let prevLh: number[] | null = null;
+      let prevRhF: number[] | null = null;
+      let prevLhF: number[] | null = null;
+
+      for (let cyc = 0; cyc < cycles; cyc++) {
+        for (let pIdx = 0; pIdx < pat.length; pIdx++) {
+          const degInfo = degrees[pat[pIdx] % degrees.length];
+          roms.push(degInfo.roman);
+          nnss.push(degInfo.nashville);
+
+          if (cyc === 0 && pIdx === 0) {
+            // Start low in range for 'up', high in range for 'down'
+            const seedMid =
+              dir === 'up'
+                ? rhRange[0] + 6
+                : rhRange[1] - 6;
+            const lhSeedMid = dir === 'up' ? lhRange[0] + 5 : lhRange[1] - 5;
+            const pickCorner = (
+              ints: number[],
+              pc: number,
+              range: [number, number],
+              targetMid: number,
+            ) => {
+              const allC: {notes: number[]; inversion: number}[] = [];
+              for (let inv = 0; inv < ints.length; inv++) {
+                for (let oct = -1; oct <= 8; oct++) {
+                  const shifted = makeVoicingMidi(ints, pc, inv, oct);
+                  if (
+                    shifted[0] >= range[0] &&
+                    shifted[shifted.length - 1] <= range[1] &&
+                    shifted[shifted.length - 1] - shifted[0] <= 12
+                  ) {
+                    allC.push({notes: shifted, inversion: inv});
+                  }
+                }
+              }
+              if (!allC.length) return pickStartVoicing({root: pc, ints}, 0, range);
+              allC.sort((a, b) => {
+                const ma = a.notes.reduce((s, x) => s + x, 0) / a.notes.length;
+                const mb = b.notes.reduce((s, x) => s + x, 0) / b.notes.length;
+                return Math.abs(ma - targetMid) - Math.abs(mb - targetMid);
+              });
+              return allC[0];
+            };
+
+            if (handIsLhOnly) {
+              const stL = pickCorner(degInfo.ints, degInfo.pc, lhRange, lhSeedMid);
+              const fL = computeVoicingFingering(stL.notes, 'L', null, DEFAULT_FINGERING_RULES, S.prefFingering.L);
+              prevLh = stL.notes;
+              prevLhF = fL.primary;
+              chList.push({
+                name: degInfo.chordName,
+                sf: degInfo.suffix,
+                ints: degInfo.ints,
+                pc: degInfo.pc,
+                exp: stL.notes,
+                hd: stL.notes.map(() => 'L'),
+                lhLen: stL.notes.length,
+                rhLen: 0,
+                vlF: fL.perNote.map(p => (p.fingers.length === 2 ? `${p.fingers[0]}/${p.fingers[1]}` : p.fingers[0])),
+                vlFingeringLh: fL,
+                vlFingeringRh: null,
+                vlInfo: {
+                  direction: dir,
+                  inversion: VL_INV_KEYS[stL.inversion] || 'root',
+                  inversionLabel: VL_INV_LABELS[stL.inversion] || INV[stL.inversion],
+                  handShift: 0,
+                  shapeChange: false,
+                  dirFlipped: false,
+                  adjusted: false,
+                  omittedFifth: false,
+                  commonTonesKept: 0,
+                  cost: 0,
+                },
+                subHint: `Cycle 1/${cycles} · start ${dir === 'up' ? 'low' : 'high'}`,
+              });
+            } else {
+              const stR = pickCorner(degInfo.ints, degInfo.pc, rhRange, seedMid);
+              const fR = computeVoicingFingering(stR.notes, 'R', null, DEFAULT_FINGERING_RULES, S.prefFingering.R);
+              prevRh = stR.notes;
+              prevRhF = fR.primary;
+              let expNotes = stR.notes;
+              let hd = stR.notes.map(() => 'R');
+              let lhLen = 0;
+              let fLh: FingeringResult | null = null;
+              let tokens: (number | string)[] = fR.perNote.map(p =>
+                p.fingers.length === 2 ? `${p.fingers[0]}/${p.fingers[1]}` : p.fingers[0],
+              );
+              if (cl === 'grand') {
+                if (bh === 'bass') {
+                  const bm = Math.max(S.lo, put([0], degInfo.pc, 0, [Math.max(S.lo, 24), Math.min(59, stR.notes[0] - 1)])[0]);
+                  const bf = bassNoteF(bm, 'L', null);
+                  prevLh = [bm];
+                  prevLhF = [bf];
+                  expNotes = [bm, ...stR.notes];
+                  hd = ['L', ...stR.notes.map(() => 'R')];
+                  lhLen = 1;
+                  fLh = {hand: 'L', perNote: [{midi: bm, fingers: [bf]}], notes: [bm], primary: [bf], score: 0};
+                  tokens = [bf, ...tokens];
+                } else {
+                  const lhB: [number, number] = [Math.max(S.lo, 36), Math.min(S.hi, stR.notes[0] - 1)];
+                  const stL = pickCorner(degInfo.ints, degInfo.pc, lhB, lhB[1] - 6);
+                  fLh = computeVoicingFingering(stL.notes, 'L', null, DEFAULT_FINGERING_RULES, S.prefFingering.L);
+                  prevLh = stL.notes;
+                  prevLhF = fLh.primary;
+                  expNotes = [...stL.notes, ...stR.notes];
+                  hd = [...stL.notes.map(() => 'L'), ...stR.notes.map(() => 'R')];
+                  lhLen = stL.notes.length;
+                  tokens = [
+                    ...fLh.perNote.map(p => (p.fingers.length === 2 ? `${p.fingers[0]}/${p.fingers[1]}` : p.fingers[0])),
+                    ...tokens,
+                  ];
+                }
+              }
+              chList.push({
+                name: degInfo.chordName,
+                sf: degInfo.suffix,
+                ints: degInfo.ints,
+                pc: degInfo.pc,
+                exp: expNotes,
+                hd,
+                lhLen,
+                rhLen: stR.notes.length,
+                vlF: tokens,
+                vlFingeringRh: fR,
+                vlFingeringLh: fLh,
+                vlInfo: {
+                  direction: dir,
+                  inversion: VL_INV_KEYS[stR.inversion] || 'root',
+                  inversionLabel: VL_INV_LABELS[stR.inversion] || INV[stR.inversion],
+                  handShift: 0,
+                  shapeChange: false,
+                  dirFlipped: false,
+                  adjusted: false,
+                  omittedFifth: false,
+                  commonTonesKept: 0,
+                  cost: 0,
+                },
+                subHint: `Cycle 1/${cycles} · start ${dir === 'up' ? 'low' : 'high'}`,
+              });
+            }
+            continue;
+          }
+
+          // At start of each new cycle, rotate the previous chord up/down one inversion family
+          let seedRh = prevRh;
+          let seedLh = prevLh;
+          const isCycleTurn = cyc > 0 && pIdx === 0;
+          if (isCycleTurn) {
+            if (seedRh && seedRh.length >= 2) {
+              seedRh = rotateInversionVoicing(seedRh, dir, rhRange);
+            }
+            if (seedLh && seedLh.length >= 2) {
+              seedLh = rotateInversionVoicing(seedLh, dir, lhRange);
+            }
+          }
+
+          const eRes = runEngineVoice({
+            ints: degInfo.ints,
+            pc: degInfo.pc,
+            cl,
+            bh,
+            rangeMode: 'unlocked',
+            direction: dir,
+            prevRh: seedRh,
+            prevRhF,
+            prevLh: seedLh,
+            prevLhF,
+          });
+          if (eRes.rhLen > 0) prevRh = eRes.notes.slice(eRes.lhLen);
+          if (eRes.lhLen > 0) prevLh = eRes.notes.slice(0, eRes.lhLen);
+          if (eRes.rhF.length) prevRhF = eRes.rhF;
+          if (eRes.lhF.length) prevLhF = eRes.lhF;
+          chList.push({
+            name: degInfo.chordName,
+            sf: degInfo.suffix,
+            ints: degInfo.ints,
+            pc: degInfo.pc,
+            exp: eRes.notes,
+            hd: eRes.hd,
+            lhLen: eRes.lhLen,
+            rhLen: eRes.rhLen,
+            vlF: eRes.vlF,
+            vlFingeringRh: eRes.rhFingering || null,
+            vlFingeringLh: eRes.lhFingering || null,
+            vlInfo: eRes.vlInfo,
+            subHint: isCycleTurn
+              ? `Cycle ${cyc + 1}/${cycles} · rotate ${dir}`
+              : `Cycle ${cyc + 1}/${cycles} · ${eRes.vlInfo.inversionLabel}`,
+          });
+        }
+      }
+
+      q.pn =
+        dir === 'up'
+          ? 'Voice leading: Up the keyboard'
+          : 'Voice leading: Down the keyboard';
+      q.relProg = true;
+      q.relLocked = tolExact;
+      q.rom = roms;
+      q.nns = nnss;
+      q.nnsLine = `${dir === 'up' ? '↑ Up' : '↓ Down'} · ${nnss.slice(0, pat.length).join(' – ')} ×${cycles}`;
+      q.ch = chList;
+      q.lab = `voice leading (${dir} the keyboard)`;
+      q.ci = {k: 'prog'};
+      q.ans = chList.slice(0, pat.length).map((c: any) => c.name).join(' → ') + ` (×${cycles})`;
+      pset(q);
     } else if (g == 'harm_guide') {
       // Guide-tone targeting (3rds & 7ths of ii-V-I)
       q.g = 'prog';
@@ -5769,6 +6523,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               lhLen: eRes.lhLen,
               rhLen: eRes.rhLen,
               vlF: eRes.vlF,
+              vlFingeringRh: eRes.rhFingering || null,
+              vlFingeringLh: eRes.lhFingering || null,
               vlInfo: eRes.vlInfo,
             };
           }
@@ -5846,6 +6602,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           q.vlF = engRes.vlF;
           q.vlRhF = engRes.rhF;
           q.vlLhF = engRes.lhF;
+          q.vlFingeringRh = engRes.rhFingering || null;
+          q.vlFingeringLh = engRes.lhFingering || null;
           q.vlInfo = engRes.vlInfo;
           q.nextVlAnchorRh = engRes.rhOut?.anchorIdx ?? null;
           q.nextVlAnchorLh = engRes.lhOut?.anchorIdx ?? null;
@@ -6291,6 +7049,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
             lhLen: eRes.lhLen,
             rhLen: eRes.rhLen,
             vlF: eRes.vlF,
+            vlFingeringRh: eRes.rhFingering || null,
+            vlFingeringLh: eRes.lhFingering || null,
             vlInfo: eRes.vlInfo,
           };
         }
@@ -6815,6 +7575,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         if (mInfo.commonTonesKept > 0) {
           bits.push(`<span class="vl-meta-item">common ${mInfo.commonTonesKept}</span>`);
         }
+        if (mInfo.cost != null && mInfo.cost > 0) {
+          bits.push(`<span class="vl-meta-item">cost ${mInfo.cost}</span>`);
+        }
+        if (mInfo.moveSummary) {
+          bits.push(`<span class="vl-meta-item">${mInfo.moveSummary}</span>`);
+        }
         if (mInfo.adjusted) {
           bits.push(`<span class="vl-meta-item vl-meta-adj">adjusted</span>`);
         }
@@ -7091,13 +7857,113 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           }
         }
       }
+      const activeFingItem = q.ch ? q.ch[q.pos] : q;
+      const rhFingObj: FingeringResult | null = activeFingItem?.vlFingeringRh || null;
+      const lhFingObj: FingeringResult | null = activeFingItem?.vlFingeringLh || null;
+
       notesForBadges.forEach((m: number, idx: number) => {
         const f = fgForBadges[idx];
         const h = fhForBadges[idx] || 'R';
         if (!f) return;
+        const fObj = h === 'R' ? rhFingObj : lhFingObj;
+        const noteOpt = fObj?.perNote?.find(p => p.midi === m);
+        const alts =
+          noteOpt && noteOpt.fingers.length === 2 ? [...noteOpt.fingers] : undefined;
         const arr = S.fm[m] || (S.fm[m] = []);
-        if (!arr.some((x: any) => x.f == f && x.h == h)) arr.push({f, h});
+        if (!arr.some((x: any) => x.f == f && x.h == h)) arr.push({f, h, alts});
       });
+    }
+
+    const fgRowEl = $('fgrow') as HTMLElement | null;
+    if (fgRowEl) {
+      const canShowRow =
+        showFingNow &&
+        fg &&
+        fh &&
+        q.g != 'scale' &&
+        q.g != 'mel' &&
+        !q.steps;
+      if (!canShowRow) {
+        fgRowEl.hidden = true;
+        fgRowEl.innerHTML = '';
+      } else {
+        const activeFingItem = q.ch ? q.ch[q.pos] : q;
+        const rhNotes = staffNotes.filter((_: number, idx: number) => fh[idx] === 'R');
+        const lhNotes = staffNotes.filter((_: number, idx: number) => fh[idx] === 'L');
+        const rhFing: FingeringResult | null =
+          activeFingItem?.vlFingeringRh ||
+          (rhNotes.length
+            ? computeVoicingFingering(
+                rhNotes,
+                'R',
+                q.prevRh?.length && q.prevRhF?.length === q.prevRh.length
+                  ? {
+                      notes: q.prevRh,
+                      primary: q.prevRhF.map((x: any) => Number(String(x).split('/')[0]) || 1),
+                    }
+                  : null,
+                DEFAULT_FINGERING_RULES,
+                S.prefFingering?.R || null,
+              )
+            : null);
+        const lhFing: FingeringResult | null =
+          activeFingItem?.vlFingeringLh ||
+          (lhNotes.length
+            ? computeVoicingFingering(
+                lhNotes,
+                'L',
+                q.prevLh?.length && q.prevLhF?.length === q.prevLh.length
+                  ? {
+                      notes: q.prevLh,
+                      primary: q.prevLhF.map((x: any) => Number(String(x).split('/')[0]) || 1),
+                    }
+                  : null,
+                DEFAULT_FINGERING_RULES,
+                S.prefFingering?.L || null,
+              )
+            : null);
+
+        const buildHandGroup = (res: FingeringResult | null) => {
+          if (!res || !res.perNote.length) return '';
+          const h = res.hand;
+          const handCls = h === 'R' ? 'rh' : 'lh';
+          const handLabel = h === 'R' ? 'RH' : 'LH';
+          const prefShape = S.prefFingering?.[h];
+          const isPref =
+            !!prefShape &&
+            prefShape.length === res.primary.length &&
+            prefShape.every((v: number, i: number) => v === res.primary[i]);
+          const posHtml = res.perNote
+            .map((p, idx) => {
+              if (p.fingers.length === 2) {
+                const alt1Shape = [...res.primary];
+                alt1Shape[idx] = p.fingers[0];
+                const alt2Shape = [...res.primary];
+                alt2Shape[idx] = p.fingers[1];
+                return (
+                  `<span class="fg-pos fg-alt-btn${isPref ? ' fg-pref' : ''}" title="Click top or bottom finger to remember your preferred fingering">` +
+                  `<span class="fg-stack">` +
+                  `<span class="fg-stack-opt${res.primary[idx] === p.fingers[0] ? ' on' : ''}" data-hand="${h}" data-shape="${alt1Shape.join(',')}">${p.fingers[0]}</span>` +
+                  `<span class="fg-stack-opt${res.primary[idx] === p.fingers[1] ? ' on' : ''}" data-hand="${h}" data-shape="${alt2Shape.join(',')}">${p.fingers[1]}</span>` +
+                  `</span>` +
+                  `</span>`
+                );
+              }
+              return `<span class="fg-pos">${p.fingers[0]}</span>`;
+            })
+            .join('');
+          return (
+            `<div class="fg-hand-group">` +
+            `<span class="fg-hand-lbl ${handCls}">${handLabel}</span>` +
+            `<span class="fg-notes">${posHtml}</span>` +
+            `</div>`
+          );
+        };
+
+        const rowHtml = buildHandGroup(lhFing) + buildHandGroup(rhFing);
+        fgRowEl.innerHTML = rowHtml;
+        fgRowEl.hidden = !rowHtml;
+      }
     }
 
     kb();
@@ -7184,9 +8050,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
     if (fg) {
       const dg = its.filter(x => fg[x.i]);
-      const bd = (cx: number, y: number, t: number, RHand: boolean) =>
-        `<circle cx=${cx} cy=${y} r=8.5 fill="${RHand ? '#243370' : '#6a3510'}" stroke="${RHand ? '#8fa6ff' : '#ffb35c'}" stroke-width=1.3 />` +
-        `<text x=${cx} y=${y + 4.4} font-size=12 font-weight=700 text-anchor=middle fill="#fff" font-family="system-ui,sans-serif">${fg[t]}</text>`;
+      const bd = (cx: number, y: number, t: number, RHand: boolean) => {
+        const lbl = String(fg[t]);
+        const fSize = lbl.includes('/') ? 9 : 12;
+        return (
+          `<circle cx=${cx} cy=${y} r=8.5 fill="${RHand ? '#243370' : '#6a3510'}" stroke="${RHand ? '#8fa6ff' : '#ffb35c'}" stroke-width=1.3 />` +
+          `<text x=${cx} y=${y + (lbl.includes('/') ? 3.4 : 4.4)} font-size=${fSize} font-weight=700 text-anchor=middle fill="#fff" font-family="system-ui,sans-serif">${lbl}</text>`
+        );
+      };
 
       if (spread) {
         const hr = dg.filter(x => fh[x.i] == 'R');
@@ -7229,9 +8100,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       if (!list || !list.length) return '';
       return `<span class="kfg-wrap">${list
         .slice(0, 2)
-        .map(
-          (b: {f: number | string; h: string}) =>
-            `<span class="kfg ${b.h == 'R' ? 'rh' : 'lh'}">${b.f}</span>`,
+        .map((b: {f: number | string; h: string; alts?: number[]}) =>
+          b.alts && b.alts.length === 2
+            ? `<span class="kfg ${b.h == 'R' ? 'rh' : 'lh'} kfg-alt"><span>${b.alts[0]}</span><span>${b.alts[1]}</span></span>`
+            : `<span class="kfg ${b.h == 'R' ? 'rh' : 'lh'}">${b.f}</span>`,
         )
         .join('')}</span>`;
     };
@@ -8014,13 +8886,17 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                 c0.rhLen > 0 ? sortedH.slice(c0.lhLen || 0) : null;
               let aRh: number | null = pRh?.length ? toScaleIdx(pRh[0]) : null;
               let aLh: number | null = pLh?.length && pLh.length > 1 ? toScaleIdx(pLh[0]) : null;
-              let pRhF: number[] | null = pRh?.length && aRh != null
-                ? assignWindowFingers(pRh.map((m: number) => toScaleIdx(m) - aRh!), 'R', c0.ints)
+              let pRhF: number[] | null = pRh?.length
+                ? S.rangeLocked && aRh != null
+                  ? assignWindowFingers(pRh.map((m: number) => toScaleIdx(m) - aRh!), 'R', c0.ints)
+                  : computeVoicingFingering(pRh, 'R', null, DEFAULT_FINGERING_RULES, S.prefFingering?.R).primary
                 : null;
               let pLhF: number[] | null = pLh?.length
                 ? pLh.length === 1
                   ? [bassNoteF(pLh[0], 'L', null)]
-                  : assignWindowFingers(pLh.map((m: number) => toScaleIdx(m) - aLh!), 'L', c0.ints)
+                  : S.rangeLocked && aLh != null
+                    ? assignWindowFingers(pLh.map((m: number) => toScaleIdx(m) - aLh!), 'L', c0.ints)
+                    : computeVoicingFingering(pLh, 'L', null, DEFAULT_FINGERING_RULES, S.prefFingering?.L).primary
                 : null;
               c0.vlF = [...(pLhF || []), ...(pRhF || [])];
               let pDirRh: VLDirection = S.vlDir === 'down' ? 'down' : 'up';
@@ -8054,6 +8930,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
                 step.lhLen = eRes.lhLen;
                 step.rhLen = eRes.rhLen;
                 step.vlF = eRes.vlF;
+                step.vlFingeringRh = eRes.rhFingering || null;
+                step.vlFingeringLh = eRes.lhFingering || null;
                 step.vlInfo = eRes.vlInfo;
                 if (eRes.rhLen > 0) pRh = eRes.notes.slice(eRes.lhLen);
                 if (eRes.lhLen > 0) pLh = eRes.notes.slice(0, eRes.lhLen);
@@ -8072,11 +8950,17 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               q.fgd = null;
             }
             const nextExists = q.ch.slice(q.pos + 1).some((c: any) => !c.rest);
-            scheduleLearnAdvance(
-              q,
-              nextExists ? 'Nice chord' : 'Completed progression!',
-              true,
-            );
+            const mvStep =
+              q.relProg && q.pos > 0 && q.ch[q.pos - 1]?.exp
+                ? describeVoiceMovement(q.ch[q.pos - 1].exp, h, smOct)
+                : null;
+            const mvText =
+              mvStep && mvStep.summary
+                ? `Cost ${mvStep.totalCost} · ${mvStep.summary}`
+                : nextExists
+                  ? 'Nice chord'
+                  : 'Completed progression!';
+            scheduleLearnAdvance(q, mvText, true);
           } else {
             const expPcs = new Set(q.exp.map((x: number) => x % 12));
             h.forEach(x => {
@@ -8156,13 +9040,17 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               c0.rhLen > 0 ? sortedH.slice(c0.lhLen || 0) : null;
             let aRh: number | null = pRh?.length ? toScaleIdx(pRh[0]) : null;
             let aLh: number | null = pLh?.length && pLh.length > 1 ? toScaleIdx(pLh[0]) : null;
-            let pRhF: number[] | null = pRh?.length && aRh != null
-              ? assignWindowFingers(pRh.map((m: number) => toScaleIdx(m) - aRh!), 'R', c0.ints)
+            let pRhF: number[] | null = pRh?.length
+              ? S.rangeLocked && aRh != null
+                ? assignWindowFingers(pRh.map((m: number) => toScaleIdx(m) - aRh!), 'R', c0.ints)
+                : computeVoicingFingering(pRh, 'R', null, DEFAULT_FINGERING_RULES, S.prefFingering?.R).primary
               : null;
             let pLhF: number[] | null = pLh?.length
               ? pLh.length === 1
                 ? [bassNoteF(pLh[0], 'L', null)]
-                : assignWindowFingers(pLh.map((m: number) => toScaleIdx(m) - aLh!), 'L', c0.ints)
+                : S.rangeLocked && aLh != null
+                  ? assignWindowFingers(pLh.map((m: number) => toScaleIdx(m) - aLh!), 'L', c0.ints)
+                  : computeVoicingFingering(pLh, 'L', null, DEFAULT_FINGERING_RULES, S.prefFingering?.L).primary
               : null;
             c0.vlF = [...(pLhF || []), ...(pRhF || [])];
             let pDirRh: VLDirection = S.vlDir === 'down' ? 'down' : 'up';
@@ -8196,6 +9084,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               step.lhLen = eRes.lhLen;
               step.rhLen = eRes.rhLen;
               step.vlF = eRes.vlF;
+              step.vlFingeringRh = eRes.rhFingering || null;
+              step.vlFingeringLh = eRes.lhFingering || null;
               step.vlInfo = eRes.vlInfo;
               if (eRes.rhLen > 0) pRh = eRes.notes.slice(eRes.lhLen);
               if (eRes.lhLen > 0) pLh = eRes.notes.slice(0, eRes.lhLen);
@@ -8218,16 +9108,28 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
               performance.now() - (q.bt0 + (4 + q.ch[q.pos].b) * q.bm),
             );
           if (S.pedal) S.pedalChanged = true;
+          const prevStepExp = q.pos > 0 ? q.ch[q.pos - 1]?.exp : null;
+          const stepMv =
+            q.relProg && prevStepExp
+              ? describeVoiceMovement(prevStepExp, h, smOct)
+              : null;
           q.pos++;
           while (q.ch[q.pos] && q.ch[q.pos].rest) q.pos++;
           if (q.pos >= q.ch.length) {
             q.played = [...h].sort((a, b) => a - b);
+            if (stepMv && stepMv.summary) {
+              q.tinfo = `Cost ${stepMv.totalCost} · ${stepMv.summary}`;
+            }
             fin(q.err == 0 && tdone(q));
             return;
           }
           pset(q);
           $('fb').style.color = 'var(--mut)';
-          $('fb').textContent = S.pedal ? 'Lift pedal on chord change' : '';
+          $('fb').textContent = S.pedal
+            ? 'Lift pedal on chord change'
+            : stepMv && stepMv.summary
+              ? `Cost ${stepMv.totalCost} · ${stepMv.summary}`
+              : '';
         } else {
           q.err++;
           const exact =
@@ -8339,7 +9241,19 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const h = [...S.held].filter((x: number) => !S.ign.has(x));
     if (h.length >= q.exp.length) {
       q.played = [...h].sort((a, b) => a - b);
-      fin(match(h, q.exp));
+      const isOk = match(h, q.exp);
+      if (isOk && q.isRelChord && (q.prevRh?.length || q.prevLh?.length)) {
+        const prevSlice = q.prevRh?.length ? q.prevRh : q.prevLh;
+        const curSlice =
+          q.rhLen > 0 && q.played.length >= (q.lhLen || 0) + q.rhLen
+            ? q.played.slice(q.lhLen || 0)
+            : q.played;
+        const mv = describeVoiceMovement(prevSlice, curSlice, smOct);
+        if (mv.summary) {
+          q.tinfo = `Cost ${mv.totalCost} · ${mv.summary}`;
+        }
+      }
+      fin(isOk);
     } else stats();
   }
 
@@ -8892,6 +9806,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   $('vlead').checked = true;
   $('fing').checked = true;
   $('dtl').checked = true;
+  syncOctaveVLState({vlead: true});
   try {
     const savedKbAudio = localStorage.getItem('pedagogue_kbaudio_v1');
     if (savedKbAudio && ['off', 'pc', 'all'].includes(savedKbAudio)) {
@@ -8908,6 +9823,101 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     $('ix').onclick = () => {
       $('app').classList.remove('io');
     };
+  }
+
+  if ($('ib')) {
+    $('ib').addEventListener(
+      'change',
+      (e: Event) => {
+        const t = e.target as HTMLSelectElement;
+        if (t?.id === 'famAnchor') {
+          S.famAnchorChord = t.value;
+          fillInfo();
+        }
+      },
+      {signal},
+    );
+    $('ib').addEventListener(
+      'click',
+      (e: MouseEvent) => {
+        const chip = (e.target as HTMLElement).closest('.fam-chip') as HTMLElement | null;
+        if (!chip) return;
+        const notes = (chip.dataset.notes || '')
+          .split(',')
+          .map(Number)
+          .filter(n => Number.isFinite(n) && n > 0);
+        if (!notes.length) return;
+        audioEngine.resume();
+        const sndPreset = curSound();
+        notes.forEach((n, idx) => audioEngine.playNote(n, idx * 0.03, 1.1, sndPreset, 0.78));
+        S.hl = new Set(notes);
+        kb();
+      },
+      {signal},
+    );
+  }
+
+  if ($('fgrow')) {
+    $('fgrow').addEventListener(
+      'click',
+      (e: MouseEvent) => {
+        const opt = (e.target as HTMLElement).closest('.fg-stack-opt') as HTMLElement | null;
+        if (!opt || !S.q) return;
+        const hand = opt.dataset.hand === 'L' ? 'L' : 'R';
+        const shape = (opt.dataset.shape || '')
+          .split(',')
+          .map(Number)
+          .filter(n => Number.isFinite(n) && n >= 1 && n <= 5);
+        if (!shape.length) return;
+        S.prefFingering[hand] = shape;
+
+        const q = S.q;
+        const item = q.ch ? q.ch[q.pos] : q;
+        const notes: number[] = item?.exp || q.exp || [];
+        const hd: string[] =
+          item?.hd ||
+          q.hd ||
+          notes.map(() => ($('clef').value === 'bass' ? 'L' : 'R'));
+        const handNotes = notes.filter((_, idx) => (hd[idx] || 'R') === hand);
+        if (handNotes.length) {
+          const prevNs = hand === 'R' ? q.prevRh : q.prevLh;
+          const prevFs = hand === 'R' ? q.prevRhF : q.prevLhF;
+          const newF = computeVoicingFingering(
+            handNotes,
+            hand,
+            prevNs?.length && prevFs?.length === prevNs.length
+              ? {
+                  notes: prevNs,
+                  primary: prevFs.map((x: any) => Number(String(x).split('/')[0]) || 1),
+                }
+              : null,
+            DEFAULT_FINGERING_RULES,
+            shape,
+          );
+          if (hand === 'R') {
+            item.vlFingeringRh = newF;
+            if (item === q) q.vlRhF = newF.primary;
+          } else {
+            item.vlFingeringLh = newF;
+            if (item === q) q.vlLhF = newF.primary;
+          }
+          const lTokens =
+            item.vlFingeringLh?.perNote.map((p: any) =>
+              p.fingers.length === 2 ? `${p.fingers[0]}/${p.fingers[1]}` : p.fingers[0],
+            ) || [];
+          const rTokens =
+            item.vlFingeringRh?.perNote.map((p: any) =>
+              p.fingers.length === 2 ? `${p.fingers[0]}/${p.fingers[1]}` : p.fingers[0],
+            ) || [];
+          if (lTokens.length + rTokens.length === notes.length) {
+            item.vlF = [...lTokens, ...rTokens];
+          }
+          q.fgd = null;
+        }
+        render();
+      },
+      {signal},
+    );
   }
 
   $('fgb').onclick = (e: MouseEvent) => {
@@ -8974,6 +9984,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       if (target.id == 'ug') fillFocus();
       if (target.id == 'scale') fillModesForScale(false);
       if (target.id == 'inmode') S.prefInMode = target.checked;
+      if (target.id == 'vlead') syncOctaveVLState({vlead: target.checked});
+      if (target.id == 'randoct') syncOctaveVLState({randomOctave: target.checked});
       if (target.id == 'audioout') {
         try {
           localStorage.setItem('pedagogue_kbaudio_v1', target.value);
@@ -9002,6 +10014,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           'dir',
           'tol',
           'order',
+          'randoct',
           'vlead',
           'clef',
         ].includes(target.id)
@@ -9032,6 +10045,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         ![
           'prompt',
           'fing',
+          'fingcheck',
           'dtl',
           'beat',
           'tempo',
@@ -9110,6 +10124,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (preset.schands) $('schands').value = preset.schands;
     if (preset.pfmt) $('pfmt').value = preset.pfmt;
     $('vlead').checked = Boolean(preset.vlead);
+    syncOctaveVLState({vlead: Boolean(preset.vlead)});
     if ($('altchords')) $('altchords').checked = false;
     if (preset.order) $('order').value = preset.order;
     if (preset.dir) $('dir').value = preset.dir;
