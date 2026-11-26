@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 
 interface SplashIntroProps {
   onComplete: () => void;
@@ -6,8 +6,18 @@ interface SplashIntroProps {
 
 export function SplashIntro({onComplete}: SplashIntroProps) {
   const [exiting, setExiting] = useState(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const completedRef = useRef(false);
+  const skipTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const finish = () => {
+      if (completedRef.current) return;
+      completedRef.current = true;
+      onCompleteRef.current();
+    };
+
     const reduced =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -16,13 +26,14 @@ export function SplashIntro({onComplete}: SplashIntroProps) {
     const endMs = reduced ? 320 : 2100;
 
     const tFade = window.setTimeout(() => setExiting(true), fadeMs);
-    const tEnd = window.setTimeout(() => onComplete(), endMs);
+    const tEnd = window.setTimeout(finish, endMs);
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         setExiting(true);
-        window.setTimeout(onComplete, 220);
+        if (skipTimerRef.current != null) window.clearTimeout(skipTimerRef.current);
+        skipTimerRef.current = window.setTimeout(finish, 220);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -30,14 +41,20 @@ export function SplashIntro({onComplete}: SplashIntroProps) {
     return () => {
       window.clearTimeout(tFade);
       window.clearTimeout(tEnd);
+      if (skipTimerRef.current != null) window.clearTimeout(skipTimerRef.current);
       window.removeEventListener('keydown', onKey);
     };
-  }, [onComplete]);
+  }, []);
 
   const handleSkip = () => {
-    if (exiting) return;
+    if (exiting || completedRef.current) return;
     setExiting(true);
-    window.setTimeout(onComplete, 220);
+    if (skipTimerRef.current != null) window.clearTimeout(skipTimerRef.current);
+    skipTimerRef.current = window.setTimeout(() => {
+      if (completedRef.current) return;
+      completedRef.current = true;
+      onCompleteRef.current();
+    }, 220);
   };
 
   return (

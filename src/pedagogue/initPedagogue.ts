@@ -36,6 +36,14 @@ import {
   prettyChordSuffix,
   type HarmonizedDegreeInfo,
 } from './scaleChordTheory';
+import {
+  buildScaleHandSequences,
+  computeScaleOctaveCapacity,
+  type ContraryStartMode,
+  type MultiOctaveChoice,
+  type ScaleHandsMode,
+  type ScaleRangeMode,
+} from './scaleRange';
 
 export interface PracticeScoreSnapshot {
   ok: number;
@@ -402,10 +410,23 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       'scrange',
       'Scale range',
       [
-        ['1', '1 octave'],
-        ['2', '2 octaves'],
+        ['1', 'Single octave'],
+        ['multi', 'Multi-octave'],
       ],
       '1',
+      'scale',
+      1,
+    ) +
+    fld(
+      'scmultioct',
+      'Multi-octave count',
+      [
+        ['auto', 'Auto'],
+        ['2', '2 oct'],
+        ['3', '3 oct'],
+        ['4', '4 oct'],
+      ],
+      'auto',
       'scale',
       1,
     ) +
@@ -420,6 +441,18 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       'one',
       'scale',
     ) +
+    fld(
+      'sccontrary',
+      'Contrary start',
+      [
+        ['unison', 'Same note'],
+        ['octave', '1 oct apart'],
+      ],
+      'unison',
+      'scale',
+      1,
+    ) +
+    `<div class="set-note" id="scoctnote" hidden></div>` +
     fld(
       'prompt',
       'Show on screen',
@@ -464,7 +497,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         ['exact', 'Exact octave'],
       ],
       'exact',
-      NOEAR,
+      'chord,int,prog,harm,pat',
       1,
     ) +
     swt(
@@ -860,10 +893,119 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     }
   }
 
+  function syncScaleOctaveUI() {
+    const scRangeEl = $('scrange') as HTMLSelectElement | null;
+    const multiEl = $('scmultioct') as HTMLSelectElement | null;
+    const handsEl = $('schands') as HTMLSelectElement | null;
+    const contraryEl = $('sccontrary') as HTMLSelectElement | null;
+    const noteEl = $('scoctnote') as HTMLElement | null;
+    if (!scRangeEl || !multiEl || !handsEl || !contraryEl) return;
+
+    const ug = $('ug')?.value || 'chord';
+    const fVal = $('focus')?.value || '';
+    const isFixedDrill = fVal === 'five' || fVal === 'hanon';
+    const hands = (handsEl.value || 'one') as ScaleHandsMode;
+    const contraryStart = (contraryEl.value || 'unison') as ContraryStartMode;
+    const rangeVal = (scRangeEl.value || '1') as ScaleRangeMode;
+    const keyVal = $('key')?.value || 'C';
+
+    let rootPcs: number[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    if (keyVal !== 'rnd') {
+      const L = LN.indexOf(keyVal[0]);
+      const a = keyVal[1] == '♯' ? 1 : keyVal[1] == '♭' ? -1 : 0;
+      if (L >= 0) rootPcs = [(LET[L] + a + 12) % 12];
+    }
+
+    const {maxGuaranteed, maxAnyKey} = computeScaleOctaveCapacity({
+      lo: S.lo,
+      hi: S.hi,
+      hands,
+      contraryStart,
+      rootPcs,
+    });
+
+    const multiWrap = multiEl.closest('.f') as HTMLElement | null;
+    const contraryWrap = contraryEl.closest('.f') as HTMLElement | null;
+    if (multiWrap) {
+      multiWrap.hidden = ug !== 'scale' || rangeVal !== 'multi';
+    }
+    if (contraryWrap) {
+      contraryWrap.hidden = ug !== 'scale' || hands !== 'contrary';
+    }
+
+    const multiSegBtns = document.querySelectorAll<HTMLButtonElement>(
+      '.seg[data-for="scmultioct"] button',
+    );
+    multiSegBtns.forEach(btn => {
+      const v = btn.dataset.v || 'auto';
+      const req = v === 'auto' ? 0 : Number(v);
+      const disabledByCap = req > 0 && req > maxGuaranteed;
+      btn.disabled = isFixedDrill || ug !== 'scale' || disabledByCap;
+      btn.title = disabledByCap
+        ? `Needs a wider keyboard range for ${req} octaves in this hand mode`
+        : '';
+    });
+
+    if (multiEl.value !== 'auto') {
+      const req = Number(multiEl.value);
+      if (req > maxGuaranteed) {
+        multiEl.value = maxGuaranteed >= 2 ? String(maxGuaranteed) : 'auto';
+      }
+    }
+
+    if (noteEl) {
+      if (ug !== 'scale' || isFixedDrill) {
+        noteEl.hidden = true;
+      } else {
+        const kbOcts = +$('octs')?.value || 5;
+        const rangeDesc = `${nm(S.lo)}–${nm(S.hi)}`;
+        let msg = '';
+        let warn = false;
+
+        if (hands === 'contrary' && contraryStart === 'octave' && maxAnyKey === 0) {
+          warn = true;
+          msg = `1 oct apart contrary needs 3+ octaves on your keyboard — using Same note inside ${rangeDesc}.`;
+        } else if (rangeVal === 'multi' && maxGuaranteed < 2) {
+          warn = true;
+          if (hands === 'contrary' && contraryStart === 'octave' && maxAnyKey >= 2) {
+            msg = `${rangeDesc}: 1 oct apart fits 2 oct only in C. Use Same note or 6+ octaves for 2 oct across keys.`;
+          } else {
+            const handDesc =
+              hands === 'contrary'
+                ? 'contrary motion'
+                : hands === 'parallel'
+                  ? 'hands together'
+                  : 'one hand';
+            msg = `${rangeDesc} fits 1 octave in ${handDesc}. Expand My keyboard for multi-octave.`;
+          }
+        } else if (rangeVal === 'multi') {
+          const handDesc =
+            hands === 'contrary'
+              ? contraryStart === 'unison'
+                ? 'contrary (same note)'
+                : 'contrary (1 oct apart)'
+              : hands === 'parallel'
+                ? 'hands together'
+                : 'one hand';
+          const extra =
+            keyVal === 'rnd' && maxAnyKey > maxGuaranteed
+              ? ` (${maxAnyKey} in some keys)`
+              : '';
+          msg = `${kbOcts}-octave keyboard (${rangeDesc}): ${handDesc} fits up to ${maxGuaranteed} octaves${extra}.`;
+        }
+
+        noteEl.textContent = msg;
+        noteEl.classList.toggle('warn', warn);
+        noteEl.hidden = !msg;
+      }
+    }
+  }
+
   function setRange() {
     S.lo = +$('lowest').value;
     S.hi = Math.min(S.lo + +$('octs').value * 12, 108);
     $('rng').textContent = 'Range: ' + nm(S.lo) + ' – ' + nm(S.hi);
+    syncScaleOctaveUI();
     kb();
   }
   $('lowest').onchange = $('octs').onchange = setRange;
@@ -3470,6 +3612,15 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           ),
       );
     } else if (q.g == 'scale' || q.g == 'mel' || q.g == 'c2s_play') {
+      if (q.lhSeq && q.rhSeq) {
+        const lhF = runDP(q.lhSeq, 'L');
+        const rhF = runDP(q.rhSeq, 'R');
+        return [
+          q.lhSeq.map((lm: number, idx: number) => [lm, q.rhSeq[idx]]),
+          q.lhSeq.map(() => ['L', 'R']),
+          q.lhSeq.map((_: number, idx: number) => [lhF[idx], rhF[idx]]),
+        ];
+      }
       if (q.steps && q.steps[0]?.length == 2) {
         st = q.steps;
         hd = q.steps.map(() => ['L', 'R']);
@@ -4119,6 +4270,13 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         }
       }
 
+      if (on && (id == 'scrange' || id == 'scmultioct' || id == 'sccontrary')) {
+        if (fVal == 'five' || fVal == 'hanon') {
+          on = false;
+          why = '5-finger and Hanon drills use a fixed pattern span';
+        }
+      }
+
       if (on && id == 'schands') {
         if (fVal == 'hanon') {
           on = true;
@@ -4158,6 +4316,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         : 'none';
     syncVlBar(relActive);
     syncScBar(g);
+    syncScaleOctaveUI();
     segsync();
     CD.forEach(i => mkdd($(i)));
   }
@@ -5264,13 +5423,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   /* =====================================================================
      20. QUESTION GENERATION
      ===================================================================== */
-  function buildScaleQuestion(q: any, cl: string, CL: string) {
+  function buildScaleQuestion(q: any, cl: string, _CL: string) {
     let dir = $('dir').value;
     const mi = +$('inv').value;
     const exinv = $('exinv').checked;
-    const octs = +$('scrange').value || 1;
-    const hands = $('schands').value || 'one';
+    const rangeMode = ($('scrange').value || '1') as ScaleRangeMode;
+    const multiChoice = ($('scmultioct')?.value || 'auto') as MultiOctaveChoice;
+    const hands = ($('schands').value || 'one') as ScaleHandsMode;
+    const contraryStart = ($('sccontrary')?.value || 'unison') as ContraryStartMode;
     const isArp = ['arp3', 'arp7', 'arpd'].includes(S.f);
+    const isFixedPattern = S.f == 'five' || S.f == 'hanon';
 
     if (dir == 'any')
       dir = ORD() ? (S.n % 2 == 0 ? 'up' : 'down') : rand(2) ? 'up' : 'down';
@@ -5323,89 +5485,64 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       baseInts = [...C.sc];
     }
 
-    // Build octave-expanded note array (for 1 or 2 octaves)
-    let fullInts: number[] = [];
-    if (S.f == 'five' || S.f == 'hanon') {
-      fullInts = baseInts;
-    } else {
-      for (let o = 0; o < octs; o++) {
-        fullInts.push(...baseInts.map(x => x + 12 * o));
-      }
-      fullInts.push(12 * octs);
-    }
-
-    const rhZone = cl == 'bass' ? [36, 72] : [57, 96];
-    let rhStart = put(fullInts, arpRootPc, 0, rhZone);
-    if (
-      (hands == 'parallel' || hands == 'contrary') &&
-      Math.min(...rhStart) - 12 < S.lo &&
-      Math.max(...rhStart) + 12 <= S.hi
-    ) {
-      rhStart = rhStart.map(m => m + 12);
-    }
-    const rhSeq = dir == 'up' ? rhStart : [...rhStart].reverse();
+    const built = buildScaleHandSequences({
+      baseInts,
+      rootPc: arpRootPc,
+      rangeMode,
+      multiChoice,
+      dir: dir === 'down' ? 'down' : 'up',
+      hands,
+      contraryStart,
+      clef: cl === 'bass' ? 'bass' : cl === 'treble' ? 'treble' : 'grand',
+      lo: S.lo,
+      hi: S.hi,
+      isFixedPattern,
+    });
 
     if (hands == 'parallel' || hands == 'contrary') {
       S.cl = 'grand';
-      const lhSeq =
-        hands == 'contrary'
-          ? [...rhStart].map((_, idx) => {
-              // Mirror interval downward from octave below rhStart[0]
-              const startBase =
-                rhStart[0] - 12 >= S.lo ? rhStart[0] - 12 : rhStart[0];
-              const invOffset = fullInts[idx] - fullInts[0];
-              return dir == 'up'
-                ? startBase - invOffset
-                : startBase - (fullInts[fullInts.length - 1] - fullInts[idx]);
-            })
-          : rhSeq.map(m => (m - 12 >= S.lo ? m - 12 : m));
-
-      // Ensure contrary stays inside range cleanly
-      const minLh = Math.min(...lhSeq);
-      const shift = minLh < S.lo ? 12 * Math.ceil((S.lo - minLh) / 12) : 0;
-      const lhFinal = lhSeq.map(m => m + shift);
-
-      const steps = rhSeq.map((rm, i) =>
-        [lhFinal[i], rm].sort((a, b) => a - b),
-      );
-      q.steps = steps;
-      q.seq = rhSeq;
-      q.exp = [...new Set(steps.flat())].sort((a, b) => a - b);
+      q.steps = built.steps;
+      q.rhSeq = built.rhSeq;
+      q.lhSeq = built.lhSeq;
+      q.seq = built.rhSeq;
+      q.exp = [...new Set(built.steps.flat())].sort((a, b) => a - b);
       q.main = arpTitle + labelSuffix;
       q.lab = C.m + labelSuffix;
       const handLabel =
         hands == 'contrary'
-          ? 'both hands (contrary)'
+          ? built.effectiveContraryStart === 'unison'
+            ? 'both hands (contrary · same note)'
+            : 'both hands (contrary · 1 oct apart)'
           : 'both hands (parallel)';
       q.top = `${C.k} ${C.m} · ${handLabel}`;
       q.topAnon = handLabel;
+      const lh0 = built.lhSeq![0];
+      const rh0 = built.rhSeq[0];
       q.startDesc =
-        'LH ' + smOct(steps[0][0]) + ' · RH ' + smOct(steps[0][1]);
-      q.startDescAny =
-        'LH ' + sm(steps[0][0]).n + ' · RH ' + sm(steps[0][1]).n;
+        lh0 === rh0
+          ? 'start unison ' + smOct(rh0)
+          : 'LH ' + smOct(lh0) + ' · RH ' + smOct(rh0);
+      q.startDescAny = q.startDesc;
       q.sub =
         dir +
         ' · ' +
-        (S.f == 'five' || S.f == 'hanon' ? 'pattern' : octs + ' oct');
-      q.ans = rhSeq.map((m: number) => sm(m).n).join(' ');
+        (isFixedPattern ? 'pattern' : built.effectiveOctaves + ' oct');
+      q.ans = built.rhSeq.map((m: number) => sm(m).n).join(' ');
     } else {
-      const zone = cl == 'grand' && ORD() ? [57, 96] : Z();
-      const singleStart = put(fullInts, arpRootPc, 0, zone);
-      const seq = dir == 'up' ? singleStart : [...singleStart].reverse();
       const handLabel = cl == 'bass' ? 'left hand' : 'right hand';
-      q.seq = seq;
-      q.exp = seq;
+      q.seq = built.rhSeq;
+      q.exp = built.rhSeq;
       q.main = arpTitle + labelSuffix;
       q.lab = C.m + labelSuffix;
       q.top = `${C.k} ${C.m} · ${handLabel}`;
       q.topAnon = handLabel;
-      q.startDesc = 'start ' + smOct(seq[0]);
-      q.startDescAny = 'start ' + sm(seq[0]).n;
+      q.startDesc = 'start ' + smOct(built.rhSeq[0]);
+      q.startDescAny = q.startDesc;
       q.sub =
         dir +
         ' · ' +
-        (S.f == 'five' || S.f == 'hanon' ? 'pattern' : octs + ' oct');
-      q.ans = seq.map((m: number) => sm(m).n).join(' ');
+        (isFixedPattern ? 'pattern' : built.effectiveOctaves + ' oct');
+      q.ans = built.rhSeq.map((m: number) => sm(m).n).join(' ');
     }
 
     q.ci = {
@@ -5414,7 +5551,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       sc: baseInts.slice(0, 8),
       r: C.r,
       ar: isArp,
-      tech: S.f == 'five' || S.f == 'hanon',
+      tech: isFixedPattern,
     };
   }
 
@@ -7306,7 +7443,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         ? q.top || ''
         : q.topAnon || '';
 
-    const tolExact = $('tol').value == 'exact';
+    const tolExact = q.g == 'scale' ? true : $('tol').value == 'exact';
 
     $('q').textContent =
       q.g == 'ear'
@@ -7514,7 +7651,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       }
     }
 
-    const staffNotes = q.steps && showFingNow ? q.steps.flat() : sn;
+    const staffNotes =
+      q.lhSeq && q.rhSeq
+        ? q.lhSeq.flatMap((lm: number, idx: number) => [lm, q.rhSeq[idx]])
+        : q.steps && showFingNow
+          ? q.steps.flat()
+          : sn;
+    const stepHandsForStaff =
+      q.lhSeq && q.rhSeq ? q.lhSeq.flatMap(() => ['L', 'R']) : fh;
     const staffSpread =
       (q.g == 'scale' ||
         q.g == 'mel' ||
@@ -7523,10 +7667,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       !(q.g == 'c2s_play' && !shown);
     $('stf').innerHTML = stf
       ? staff(
-          q.steps ? q.steps.flat() : sn,
+          staffNotes,
           staffSpread,
           fg,
-          fh,
+          stepHandsForStaff,
           !!q.steps,
         )
       : '';
@@ -7628,7 +7772,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
 
     S.fm = {};
     if (showFingNow && fg && fh) {
-      let notesForBadges: number[] = q.steps ? q.steps.flat() : staffNotes;
+      let notesForBadges: number[] =
+        q.lhSeq && q.rhSeq
+          ? q.lhSeq.flatMap((lm: number, idx: number) => [lm, q.rhSeq[idx]])
+          : q.steps
+            ? q.steps.flat()
+            : staffNotes;
       let fgForBadges = fg;
       let fhForBadges = fh;
       const exactKbCheck =
@@ -7834,7 +7983,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         col: paired ? Math.floor(i / 2) : i,
         s: n.l + 7 * n.o,
         a: n.a,
-        c: cl == 'grand' ? (m >= 60 ? 't' : 'b') : cl[0],
+        c:
+          cl == 'grand'
+            ? fh?.[i] == 'L'
+              ? 'b'
+              : fh?.[i] == 'R'
+                ? 't'
+                : m >= 60
+                  ? 't'
+                  : 'b'
+            : cl[0],
       };
     });
 
@@ -8573,6 +8731,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (S.studyMode == 'teach') {
       const targetList: number[] = q.steps ? q.steps[q.pos] || [] : q.exp || [];
       const exact =
+        q.g == 'scale' ||
         $('tol').value == 'exact' ||
         (!!q.isRelAnchored && !!S.rangeLocked) ||
         (q.g == 'prog' && !!q.relProg && !!q.relLocked && q.pos > 0 && !!S.rangeLocked);
@@ -8981,7 +9140,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           .sort((a, b) => a - b);
         if (h.length >= expected.length) {
           S.ign = new Set(S.held);
-          const exact = $('tol').value == 'exact';
+          const exact = q.g == 'scale' ? true : $('tol').value == 'exact';
           const okStep =
             h.length == expected.length &&
             expected.every((em: number, i: number) =>
@@ -9015,7 +9174,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         }
       } else {
         const e = q.seq[q.pos];
-        if ($('tol').value == 'exact' ? m == e : m % 12 == e % 12) {
+        const exact = q.g == 'scale' ? true : $('tol').value == 'exact';
+        if (exact ? m == e : m % 12 == e % 12) {
           q.hit.add(m);
           q.bad.delete(m);
           q.pos++;
@@ -9831,7 +9991,9 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           'inv',
           'lhinv',
           'scrange',
+          'scmultioct',
           'schands',
+          'sccontrary',
           'exinv',
           'dir',
           'tol',
@@ -9942,8 +10104,24 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (preset.bhmode) $('bhmode').value = preset.bhmode;
     if (preset.inv != null) $('inv').value = String(preset.inv);
     if (preset.lhinv != null) $('lhinv').value = String(preset.lhinv);
-    if (preset.scrange) $('scrange').value = preset.scrange;
+    if (preset.scrange) {
+      if (preset.scrange === '1') {
+        $('scrange').value = '1';
+      } else {
+        $('scrange').value = 'multi';
+        if ($('scmultioct')) {
+          $('scmultioct').value =
+            preset.scrange === '2' ? '2' : preset.scmultioct || 'auto';
+        }
+      }
+    }
+    if (preset.scmultioct && $('scmultioct')) {
+      $('scmultioct').value = preset.scmultioct;
+    }
     if (preset.schands) $('schands').value = preset.schands;
+    if (preset.sccontrary && $('sccontrary')) {
+      $('sccontrary').value = preset.sccontrary;
+    }
     if (preset.pfmt) $('pfmt').value = preset.pfmt;
     $('vlead').checked = Boolean(preset.vlead);
     syncOctaveVLState({vlead: Boolean(preset.vlead)});

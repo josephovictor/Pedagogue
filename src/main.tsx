@@ -6,6 +6,14 @@ import {registerSW} from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
-registerSW({immediate: true});
+if (import.meta.env.PROD) {
+  registerSW({immediate: false});
+} else if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(registrations => {
+    registrations.forEach(reg => {
+      reg.unregister();
+    });
+  });
+}
 
 createRoot(document.getElementById('root')!).render(<App />);

@@ -1,5 +1,5 @@
 import {BookOpen, Clock, Hourglass} from 'lucide-react';
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {
   CurriculumModal,
   loadCurriculumProgress,
@@ -20,6 +20,7 @@ export default function App() {
   const [showIntro, setShowIntro] = useState(true);
   const [view, setView] = useState<AppView>('home');
   const [curOpen, setCurOpen] = useState(false);
+  const [curStats, setCurStats] = useState(() => loadCurriculumProgress());
   const [scoreSnap, setScoreSnap] = useState<PracticeScoreSnapshot>({
     ok: 0,
     tot: 0,
@@ -30,23 +31,32 @@ export default function App() {
   const [resetModalSnap, setResetModalSnap] =
     useState<PracticeScoreSnapshot | null>(null);
 
-  const curStats = useMemo(() => loadCurriculumProgress(), [view, curOpen]);
+  const handleIntroComplete = useCallback(() => {
+    setShowIntro(false);
+  }, []);
 
-  const enterLearn = (preset?: DrillPreset) => {
+  const enterLearn = useCallback((preset?: DrillPreset) => {
     setView('learn');
+    setCurStats(loadCurriculumProgress());
     window.requestAnimationFrame(() => {
       controllerRef.current?.setStudyMode('teach', preset);
       controllerRef.current?.refreshLayout();
     });
-  };
+  }, []);
 
-  const enterPractice = (preset?: DrillPreset) => {
+  const enterPractice = useCallback((preset?: DrillPreset) => {
     setView('practice');
+    setCurStats(loadCurriculumProgress());
     window.requestAnimationFrame(() => {
       controllerRef.current?.setStudyMode('practice', preset);
       controllerRef.current?.refreshLayout();
     });
-  };
+  }, []);
+
+  const closeCurriculum = useCallback(() => {
+    setCurOpen(false);
+    setCurStats(loadCurriculumProgress());
+  }, []);
 
   useEffect(() => {
     const ctrl = initPedagogue({
@@ -59,7 +69,7 @@ export default function App() {
       controllerRef.current = null;
       ctrl.destroy();
     };
-  }, []);
+  }, [enterPractice]);
 
   useEffect(() => {
     document.body.dataset.view = showIntro ? 'intro' : view;
@@ -95,7 +105,7 @@ export default function App() {
 
   return (
     <>
-      {showIntro && <SplashIntro onComplete={() => setShowIntro(false)} />}
+      {showIntro && <SplashIntro onComplete={handleIntroComplete} />}
 
       <header className="top">
         <button
@@ -658,9 +668,9 @@ export default function App() {
 
       <CurriculumModal
         open={curOpen}
-        onClose={() => setCurOpen(false)}
-        onStudyInClass={preset => enterLearn(preset)}
-        onLaunchPractice={preset => enterPractice(preset)}
+        onClose={closeCurriculum}
+        onStudyInClass={enterLearn}
+        onLaunchPractice={enterPractice}
       />
 
       {resetModalSnap && (

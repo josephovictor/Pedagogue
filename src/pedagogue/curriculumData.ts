@@ -11,8 +11,10 @@ export interface DrillPreset {
   lhinv?: number;
   bhmode?: 'bass' | 'same' | 'diff';
   clef?: 'treble' | 'bass' | 'grand';
-  scrange?: '1' | '2';
+  scrange?: '1' | '2' | 'multi';
+  scmultioct?: 'auto' | '2' | '3' | '4';
   schands?: 'one' | 'parallel' | 'contrary';
+  sccontrary?: 'unison' | 'octave';
   pfmt?: 'name' | 'roman' | 'nns';
   vlead?: boolean;
   order?: 'rnd' | 'ord';
