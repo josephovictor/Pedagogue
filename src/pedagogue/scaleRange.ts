@@ -1,6 +1,6 @@
 export type ScaleRangeMode = '1' | 'multi';
 export type MultiOctaveChoice = 'auto' | '2' | '3' | '4';
-export type ScaleHandsMode = 'one' | 'parallel' | 'contrary';
+export type ScaleHandsMode = 'right' | 'left' | 'parallel' | 'contrary' | 'one';
 export type ContraryStartMode = 'unison' | 'octave';
 
 export interface ScaleMaxResult {
@@ -53,7 +53,7 @@ export function fitsSpanInKeyboard(opts: {
   hi: number;
 }): boolean {
   const {rootMidi, minOff, maxOff, hands, contraryStart, lo, hi} = opts;
-  if (hands === 'one') {
+  if (hands === 'one' || hands === 'right' || hands === 'left') {
     return rootMidi + minOff >= lo && rootMidi + maxOff <= hi;
   }
   if (hands === 'parallel') {
@@ -94,7 +94,11 @@ export function findBestScaleRootMidi(opts: {
   if (!candidates.length) return null;
 
   let targetAnchor: number;
-  if (opts.hands === 'one') {
+  if (opts.hands === 'left') {
+    targetAnchor = 48;
+  } else if (opts.hands === 'right') {
+    targetAnchor = 60;
+  } else if (opts.hands === 'one') {
     targetAnchor = opts.clef === 'bass' ? 48 : 60;
   } else if (opts.hands === 'parallel') {
     targetAnchor = 60;
@@ -350,7 +354,7 @@ export function buildScaleHandSequences(opts: {
   const rhAsc = fullInts.map(off => rootMidi + off);
   const rhSeq = opts.dir === 'up' ? rhAsc : [...rhAsc].reverse();
 
-  if (opts.hands === 'one') {
+  if (opts.hands === 'one' || opts.hands === 'right' || opts.hands === 'left') {
     return {
       rhSeq,
       lhSeq: null,

@@ -44,6 +44,7 @@ import {
   type ScaleHandsMode,
   type ScaleRangeMode,
 } from './scaleRange';
+import {computeScaleOrMelFingering} from './scaleFingering';
 
 export interface PracticeScoreSnapshot {
   ok: number;
@@ -434,11 +435,12 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       'schands',
       'Scale hands',
       [
-        ['one', 'One hand'],
-        ['parallel', 'Hands together'],
+        ['right', 'Right hand'],
+        ['left', 'Left hand'],
+        ['parallel', 'Both hands'],
         ['contrary', 'Contrary motion'],
       ],
-      'one',
+      'right',
       'scale',
     ) +
     fld(
@@ -904,7 +906,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const ug = $('ug')?.value || 'chord';
     const fVal = $('focus')?.value || '';
     const isFixedDrill = fVal === 'five' || fVal === 'hanon';
-    const hands = (handsEl.value || 'one') as ScaleHandsMode;
+    const hands = (handsEl.value || 'right') as ScaleHandsMode;
     const contraryStart = (contraryEl.value || 'unison') as ContraryStartMode;
     const rangeVal = (scRangeEl.value || '1') as ScaleRangeMode;
     const keyVal = $('key')?.value || 'C';
@@ -961,6 +963,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         const rangeDesc = `${nm(S.lo)}–${nm(S.hi)}`;
         let msg = '';
         let warn = false;
+        const handDescShort =
+          hands === 'contrary'
+            ? contraryStart === 'unison'
+              ? 'contrary (same note)'
+              : 'contrary (1 oct apart)'
+            : hands === 'parallel'
+              ? 'both hands'
+              : hands === 'left'
+                ? 'left hand'
+                : 'right hand';
 
         if (hands === 'contrary' && contraryStart === 'octave' && maxAnyKey === 0) {
           warn = true;
@@ -970,28 +982,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
           if (hands === 'contrary' && contraryStart === 'octave' && maxAnyKey >= 2) {
             msg = `${rangeDesc}: 1 oct apart fits 2 oct only in C. Use Same note or 6+ octaves for 2 oct across keys.`;
           } else {
-            const handDesc =
-              hands === 'contrary'
-                ? 'contrary motion'
-                : hands === 'parallel'
-                  ? 'hands together'
-                  : 'one hand';
-            msg = `${rangeDesc} fits 1 octave in ${handDesc}. Expand My keyboard for multi-octave.`;
+            msg = `${rangeDesc} fits 1 octave in ${handDescShort}. Expand My keyboard for multi-octave.`;
           }
         } else if (rangeVal === 'multi') {
-          const handDesc =
-            hands === 'contrary'
-              ? contraryStart === 'unison'
-                ? 'contrary (same note)'
-                : 'contrary (1 oct apart)'
-              : hands === 'parallel'
-                ? 'hands together'
-                : 'one hand';
           const extra =
             keyVal === 'rnd' && maxAnyKey > maxGuaranteed
               ? ` (${maxAnyKey} in some keys)`
               : '';
-          msg = `${kbOcts}-octave keyboard (${rangeDesc}): ${handDesc} fits up to ${maxGuaranteed} octaves${extra}.`;
+          msg = `${kbOcts}-octave keyboard (${rangeDesc}): ${handDescShort} fits up to ${maxGuaranteed} octaves${extra}.`;
         }
 
         noteEl.textContent = msg;
@@ -3408,59 +3406,6 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
   /* =====================================================================
      12. FINGERING
      ===================================================================== */
-  function runDP(ms: number[], h: string) {
-    const s = h == 'R' ? 1 : -1,
-      n = ms.length;
-    if (!n) return [];
-
-    const cost = (a: number, b: number, m1: number, m2: number) => {
-      const d = (m2 - m1) * s,
-        dl = b - a,
-        ad = Math.abs(d);
-      let c = 0;
-      if (d == 0) c = a == b ? 0 : 1;
-      else if (ad > 9) c = 1.5;
-      else if (Math.sign(d) == Math.sign(dl))
-        c =
-          Math.max(0, ad - (Math.abs(dl) * 2 + 1)) * 3 +
-          Math.max(0, Math.abs(dl) * 1.4 - ad) * 0.5;
-      else if ((d > 0 && b == 1) || (d < 0 && a == 1)) {
-        const o = d > 0 ? a : b;
-        c = 2 + (o == 3 || o == 4 ? 0 : 3);
-      } else return 99;
-      if (b == 1 && BK(m2)) c += 2;
-      if (b == 5 && BK(m2)) c += 1.5;
-      return c;
-    };
-
-    const dp: [number, number][][] = [
-      [1, 2, 3, 4, 5].map(f => [
-        [0, 0.1, 0.4, 0.6, 0.4][f - 1] + (f == 1 && BK(ms[0]) ? 2 : 0),
-        0,
-      ]),
-    ];
-    for (let i = 1; i < n; i++)
-      dp.push(
-        [1, 2, 3, 4, 5].map(b => {
-          let best: [number, number] = [1e9, 0];
-          for (let a = 1; a <= 5; a++) {
-            const v = dp[i - 1][a - 1][0] + cost(a, b, ms[i - 1], ms[i]);
-            if (v < best[0]) best = [v, a];
-          }
-          return best;
-        }),
-      );
-
-    const last = dp[n - 1].map((x, i) => x[0] + [0.2, 0.4, 0.4, 0.2, 0][i]);
-    let f = last.indexOf(Math.min(...last)) + 1;
-    const out = [f];
-    for (let i = n - 1; i > 0; i--) {
-      f = dp[i][f - 1][1];
-      out.unshift(f);
-    }
-    return out;
-  }
-
   function bassNoteF(
     m: number,
     h: string,
@@ -3537,9 +3482,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       let prevChord = prevHandState?.[h as 'L' | 'R'] || null;
       const flush = () => {
         if (!run.length) return;
-        const f = runDP(
+        const f = computeScaleOrMelFingering(
           run.map(r => st[r[0]][r[1]]),
-          h,
+          h === 'L' ? 'L' : 'R',
+          null,
         );
         run.forEach((r, i) => (F[r[0]][r[1]] = f[i]));
         run = [];
@@ -3613,8 +3559,8 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       );
     } else if (q.g == 'scale' || q.g == 'mel' || q.g == 'c2s_play') {
       if (q.lhSeq && q.rhSeq) {
-        const lhF = runDP(q.lhSeq, 'L');
-        const rhF = runDP(q.rhSeq, 'R');
+        const lhF = computeScaleOrMelFingering(q.lhSeq, 'L', q.ci);
+        const rhF = computeScaleOrMelFingering(q.rhSeq, 'R', q.ci);
         return [
           q.lhSeq.map((lm: number, idx: number) => [lm, q.rhSeq[idx]]),
           q.lhSeq.map(() => ['L', 'R']),
@@ -3625,10 +3571,22 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         st = q.steps;
         hd = q.steps.map(() => ['L', 'R']);
       } else {
-        st = q.seq.map((m: number) => [m]);
-        hd = st.map(() => [
-          cl == 'bass' ? 'L' : cl == 'treble' ? 'R' : q.seq[0] >= 57 ? 'R' : 'L',
-        ]);
+        const singleHand: 'L' | 'R' =
+          q.hand === 'L' || q.hand === 'R'
+            ? q.hand
+            : cl == 'bass'
+              ? 'L'
+              : cl == 'treble'
+                ? 'R'
+                : q.seq[0] >= 57
+                  ? 'R'
+                  : 'L';
+        const fArr = computeScaleOrMelFingering(q.seq, singleHand, q.ci);
+        return [
+          q.seq.map((m: number) => [m]),
+          q.seq.map(() => [singleHand]),
+          fArr.map((f: number) => [f]),
+        ];
       }
     } else {
       st = [q.exp];
@@ -5429,7 +5387,7 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     const exinv = $('exinv').checked;
     const rangeMode = ($('scrange').value || '1') as ScaleRangeMode;
     const multiChoice = ($('scmultioct')?.value || 'auto') as MultiOctaveChoice;
-    const hands = ($('schands').value || 'one') as ScaleHandsMode;
+    const hands = ($('schands').value || 'right') as ScaleHandsMode;
     const contraryStart = ($('sccontrary')?.value || 'unison') as ContraryStartMode;
     const isArp = ['arp3', 'arp7', 'arpd'].includes(S.f);
     const isFixedPattern = S.f == 'five' || S.f == 'hanon';
@@ -5493,7 +5451,16 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
       dir: dir === 'down' ? 'down' : 'up',
       hands,
       contraryStart,
-      clef: cl === 'bass' ? 'bass' : cl === 'treble' ? 'treble' : 'grand',
+      clef:
+        hands === 'left'
+          ? 'bass'
+          : hands === 'right'
+            ? 'treble'
+            : cl === 'bass'
+              ? 'bass'
+              : cl === 'treble'
+                ? 'treble'
+                : 'grand',
       lo: S.lo,
       hi: S.hi,
       isFixedPattern,
@@ -5529,7 +5496,10 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
         (isFixedPattern ? 'pattern' : built.effectiveOctaves + ' oct');
       q.ans = built.rhSeq.map((m: number) => sm(m).n).join(' ');
     } else {
-      const handLabel = cl == 'bass' ? 'left hand' : 'right hand';
+      const isLeft = hands === 'left' || (hands === 'one' && cl === 'bass');
+      S.cl = isLeft ? 'bass' : 'treble';
+      q.hand = isLeft ? 'L' : 'R';
+      const handLabel = isLeft ? 'left hand' : 'right hand';
       q.seq = built.rhSeq;
       q.exp = built.rhSeq;
       q.main = arpTitle + labelSuffix;
@@ -10118,7 +10088,14 @@ export function initPedagogue(opts?: PedagogueOptions): PedagogueController {
     if (preset.scmultioct && $('scmultioct')) {
       $('scmultioct').value = preset.scmultioct;
     }
-    if (preset.schands) $('schands').value = preset.schands;
+    if (preset.schands) {
+      $('schands').value =
+        preset.schands === 'one'
+          ? preset.clef === 'bass'
+            ? 'left'
+            : 'right'
+          : preset.schands;
+    }
     if (preset.sccontrary && $('sccontrary')) {
       $('sccontrary').value = preset.sccontrary;
     }
